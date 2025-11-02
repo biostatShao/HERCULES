@@ -1,10 +1,10 @@
-# HVAC
-![image](https://github.com/biostatShao/HVAC/blob/main/image.jpg)
+# HERCULES
+![image](https://github.com/biostatShao/HERCULES/blob/main/image.jpg)
 Hierarchical Bayesian model with Variational inference and functional Annotation integration for Cross-ancestry prediction
 ===========================================================================
 # 1 Overview
 
-We introduce HVAC  (Hierarchical Bayesian model with Variational inference and functional Annotation integration for Cross-ancestry prediction), a novel cross-population PRS framework employing a three-tiered Bayesian architecture that facilitates coordinated information transfer across diverse populations. The hierarchical structure operates through three functionally integrated components. Firstly, an ancestry-specific inference layer employing annotation-informed Gaussian mixture models to derive population-specific variational posteriors, addressing localized linkage disequilibrium patterns while enabling regularized parameter sharing. Secondly, a cross-ancestry calibration layer utilizing dynamic beta-shrinkage priors that bidirectionally propagate uncertainty estimates across populations, thereby balancing ancestral specificity with shared genetic architecture. Thirdly, polygenic synthesis layer integrating population-specific and cross-ancestry signals through an ensemble super-learner approach with genotype-optimized weighting, employing stacked regression to enhance generalizability while reducing ancestry-related overfitting.
+We introduce HERCULES  (Hierarchical Bayesian model with Variational inference and functional Annotation integration for Cross-ancestry prediction), a novel cross-population PRS framework employing a three-tiered Bayesian architecture that facilitates coordinated information transfer across diverse populations. The hierarchical structure operates through three functionally integrated components. Firstly, an ancestry-specific inference layer employing annotation-informed Gaussian mixture models to derive population-specific variational posteriors, addressing localized linkage disequilibrium patterns while enabling regularized parameter sharing. Secondly, a cross-ancestry calibration layer utilizing dynamic beta-shrinkage priors that bidirectionally propagate uncertainty estimates across populations, thereby balancing ancestral specificity with shared genetic architecture. Thirdly, polygenic synthesis layer integrating population-specific and cross-ancestry signals through an ensemble super-learner approach with genotype-optimized weighting, employing stacked regression to enhance generalizability while reducing ancestry-related overfitting.
 
 # 2 Installation Instructions
 Our software is built on Python version 3.8 or later. To ensure optimal performance and compatibility, we strongly recommend creating a dedicated environment using Conda before installation.
@@ -12,11 +12,11 @@ Our software is built on Python version 3.8 or later. To ensure optimal performa
 1. Install Conda: If you do not have Conda installed, download and install it from the official Conda website (https://repo.anaconda.com/archive/index.html).
 2. Create a Conda Environment:
 ```python
-conda create -n hvac python=3.11
+conda create -n HERCULES python=3.11
 ```
 3. Activate the Environment:
 ```python
-conda activate hvac
+conda activate HERCULES
 ```
 4. Installing Dependencies:
 Install `magenpy` using pip
@@ -150,9 +150,9 @@ pheno = paste0("/data2/projects/bioinfo/zhshao/GRS/ukbb_",tolower(strsplit(trait
 # Set GWAS summary file path
 sums_p <- paste0(sums_p, traits, "/")
 
-# Run HVAC for each chromosome
+# Run HERCULES for each chromosome
 for (chr in 1:22) {
-  HVAC(GRS.input, traits, chr, sums_p, base_pop, target_pop,
+  HERCULES(GRS.input, traits, chr, sums_p, base_pop, target_pop,
                     base_p, base_f,target_p, target_f,cova = NULL,
                     sums_out="/data2/projects/bioinfo/zhshao/GWAS.summary/cross_pop/",
                     pheno, phe_trait, out, temp, bina = F)
@@ -166,4 +166,4 @@ Special thanks to Shadi [https://github.com/shz9/viprs] for providing the founda
 We are very grateful to any questions, comments, or bugs reports; and please contact [Zhonghe Shao](https://github.com/biostatShao) via zhonghe@hust.edu.cn.
 
 ## Update
-2024-12-02 HVAC version 0.0.1
+2024-12-02 HERCULES version 0.0.1
