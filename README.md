@@ -1,5 +1,5 @@
 # HERCULES
-![image](https://github.com/biostatShao/HERCULES/blob/main/image.tif)
+![image](https://github.com/biostatShao/HERCULES/blob/main/image.png)
 Hierarchical Bayesian model with Variational inference and functional Annotation integration for Cross-ancestry prediction
 ===========================================================================
 # 1 Overview
