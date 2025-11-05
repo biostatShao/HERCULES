@@ -111,12 +111,12 @@ Format:
 - `cova`: Covariates to consider; if none, enter `NULL` (e.g., `c("BaseAge","Sexgenetic")`)
 - `bina`: Whether the outcome is binary data (e.g., `T`)
 - `ct_result`: Whether to output 11 tissue-specific PRS prediction levels (e.g., `T`)
-- `software_path`: The directory to OmniPRS (e.g., `/your/path/`)
+- `software_path`: The directory to HERCULES (e.g., `/your/path/`)
 - `plink_path`: The directory to PLINK1.9 and PLINK2.0
 
 ## 3.3 Running
 
-Below is an example of running the OmniPRS package:
+Below is an example of running the HERCULES package:
 
 ```r
 # R version
