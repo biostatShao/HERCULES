@@ -150,34 +150,6 @@ HERCULES("hercules.yaml")
 Python owns configuration, orchestration, manifests, checkpoints, and external
 process handling. R is used only for the final validated ensemble procedure.
 
-## Scientific validation status
-
-The implementation is executable end to end on the validated Linux platform.
-The clean package passed 48 automated tests. Quantitative and binary examples
-completed from an isolated installation. A table-by-table comparison against
-the pre-unification deterministic reference run covered M1 and M2 selected and
-grid scores, M3 scores, posterior tables, ensemble inputs, predictions, and
-metrics; every compared numeric value had a maximum absolute difference of
-`0.0`.
-
-The quantitative example completed in 35.76 seconds with 247,732 KiB peak
-resident memory and produced R2 = 0.019599803263548. The binary example
-completed in 26.39 seconds with 216,956 KiB peak resident memory and produced
-AUC = 0.683862433862434. These values validate packaging and deterministic
-execution, not scientific performance on real data.
-
-One historical M3 comparison passed at `rtol=1e-8, atol=1e-10`. Historical M1
-and M2 replays retained exact schemas and SNP order but did not pass the
-predefined float32 tolerance. Raw annotation-to-per-SNP preprocessing remains
-an upstream input-preparation responsibility.
-
-Therefore:
-
-> The refactor was designed to preserve the identified scientific defaults,
-> but full scientific equivalence has not yet been demonstrated.
-
-See [VALIDATION.md](VALIDATION.md) for the executed checks and their limits.
-
 ## License and attribution
 
 HERCULES is distributed under the MIT License. Required upstream copyright and
