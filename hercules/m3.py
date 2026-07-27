@@ -1,4 +1,9 @@
-"""HERCULES M3 integration matching the recovered ``vi_bayes_paper`` routine."""
+"""HERCULES M3 integration matching the recovered ``vi_bayes_paper`` routine.
+
+The recovered implementation does not contain an ancestry-bridging ``lambda``
+parameter or a Beta/Uniform prior for such a parameter. No unverified lambda
+update is introduced here.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +43,11 @@ def vi_bayes_paper(
     ``sigma`` arguments and squares them inside this routine.  This behavior is
     intentionally retained until a separate scientific review authorizes a
     variance-interpretation change.
+
+    This routine has no ancestry-bridging lambda parameter. A manuscript
+    description of ``lambda ~ Uniform(0, 1)`` cannot be represented as an
+    implementation change without the authoritative analysis source or a
+    separately reviewed and numerically validated derivation.
     """
 
     mu_target = np.asarray(mu_target, dtype=np.float64)

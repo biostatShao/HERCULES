@@ -362,7 +362,9 @@ class HerculesModel(BayesPRSModel):
             if 'tau' in param_0:
                 self.var_tau[c] = param_0['tau'][c]
             else:
-                self.var_tau[c] = (self.Nj[c] / self.sigma_epsilon) + self.tau_beta
+                self.var_tau[c] = (
+                    self.Nj[c] / self.sigma_epsilon
+                ) + self.get_tau_beta(c)
 
             self.var_tau[c] = self.var_tau[c].astype(self.float_precision, order=self.order, copy=False)
 

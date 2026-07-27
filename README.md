@@ -134,6 +134,43 @@ hercules ensemble --config hercules.yaml
 Requesting M3 or the ensemble automatically runs missing prerequisite stages.
 Checkpoints include the trait, chromosome, stage, and configuration hash.
 
+## Fixed per-SNP variance prior for M1 and M2
+
+Both M1 and M2 use a fixed, stage-specific prior variance for every SNP. For
+FastGWA input, the file's `P` column is deliberately repurposed: it must contain
+the precomputed per-SNP variance (for example, the `baseline` value from an
+LDSC-derived `.snpvg` file), not a statistical P-value. `magenpy` exposes this
+input column internally as `PVAL`, and HERCULES computes
+
+```text
+tau_beta_j = 1 / PVAL_j
+```
+
+because `tau_beta` is the prior precision. The precision is fixed through
+initialization and every M-step. M1 reads the target-ancestry FastGWA file; M2
+independently reads the base-ancestry FastGWA file. Values must be finite and
+strictly greater than zero.
+
+```yaml
+m1:
+  per_snp_prior:
+    enabled: true
+    source: summary_statistics
+    column: PVAL
+    input_type: variance
+    fixed_during_inference: true
+m2:
+  per_snp_prior:
+    enabled: true
+    source: summary_statistics
+    column: PVAL
+    input_type: variance
+    fixed_during_inference: true
+```
+
+Do not place ordinary association P-values in this column when running
+HERCULES.
+
 Configuration precedence is:
 
 ```text
@@ -153,23 +190,35 @@ process handling. R is used only for the final validated ensemble procedure.
 ## Scientific validation status
 
 The implementation is executable end to end on the validated Linux platform.
-The clean package passed 48 automated tests. Quantitative and binary examples
-completed from an isolated installation. A table-by-table comparison against
-the pre-unification deterministic reference run covered M1 and M2 selected and
-grid scores, M3 scores, posterior tables, ensemble inputs, predictions, and
-metrics; every compared numeric value had a maximum absolute difference of
-`0.0`.
+The corrected package passed 57 automated tests. Quantitative and binary
+examples completed end to end, and the quantitative example also completed
+from a clean wheel installation outside the source checkout. A table-by-table
+comparison between the corrected editable installation and corrected wheel
+installation covered M1/M2 scores and posteriors, M3, and ensemble outputs;
+every compared numeric value had a maximum absolute difference of `0.0`.
 
-The quantitative example completed in 35.76 seconds with 247,732 KiB peak
-resident memory and produced R2 = 0.019599803263548. The binary example
-completed in 26.39 seconds with 216,956 KiB peak resident memory and produced
-AUC = 0.683862433862434. These values validate packaging and deterministic
-execution, not scientific performance on real data.
+The corrected quantitative example completed in 68.94 seconds with 249,556
+KiB peak resident memory and produced R2 = 0.0577308741972629. The corrected
+binary example completed in 19.32 seconds with 216,928 KiB peak resident memory
+and produced AUC = 0.683862433862434. These values validate packaging and
+deterministic execution, not scientific performance on real data.
+
+The final reported mean `tau_beta` matched `mean(1/P)` from the stage-specific
+input to float32 output precision: absolute differences were approximately
+`8.2e-7` for M1 and `1.1e-6` for M2.
 
 One historical M3 comparison passed at `rtol=1e-8, atol=1e-10`. Historical M1
 and M2 replays retained exact schemas and SNP order but did not pass the
 predefined float32 tolerance. Raw annotation-to-per-SNP preprocessing remains
-an upstream input-preparation responsibility.
+an upstream input-preparation responsibility. The example FastGWA files use
+positive synthetic per-SNP variances in their `P` columns.
+
+The recovered M3 source currently contains no ancestry-bridging `lambda`
+parameter and no Beta or Uniform prior for such a parameter. Therefore no
+unverified lambda implementation has been added. Aligning a manuscript
+`lambda ~ Uniform(0,1)` description with executable code requires the original
+analysis source (including its lambda updates) or a separately authorized and
+numerically validated scientific implementation.
 
 Therefore:
 

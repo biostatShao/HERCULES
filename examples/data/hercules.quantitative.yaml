@@ -41,6 +41,12 @@ m1:
   pi_steps: 10
   sigma_epsilon_steps: 10
   sumstats_format: fastgwa
+  per_snp_prior:
+    enabled: true
+    source: summary_statistics
+    column: PVAL
+    input_type: variance
+    fixed_during_inference: true
   validation_keep: examples/data/target.validation.keep
   validation_phenotype: examples/data/target.validation.quantitative.pheno
 m2:
@@ -48,6 +54,12 @@ m2:
   pi_steps: 10
   sigma_epsilon_steps: 10
   sumstats_format: fastgwa
+  per_snp_prior:
+    enabled: true
+    source: summary_statistics
+    column: PVAL
+    input_type: variance
+    fixed_during_inference: true
   validation_genotype: examples/data/genotypes/base/base
   validation_keep: examples/data/base.validation.keep
   validation_phenotype: examples/data/base.validation.quantitative.pheno
@@ -63,4 +75,3 @@ checkpoint:
 logging:
   level: INFO
   file: ""
-

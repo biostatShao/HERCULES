@@ -4,6 +4,8 @@ This generator creates a public, deterministic two-ancestry smoke dataset with
 PLINK genotype files, magenpy LD stores, fastGWA-style summary statistics,
 functional annotations, per-SNP weights, validation phenotypes, and both
 quantitative and binary HERCULES configurations. It contains no private data.
+The generated FastGWA `P` columns contain stage-specific per-SNP prior
+variances rather than association P-values.
 
 Requirements: Python 3.11 with HERCULES installed, PLINK 1.9, PLINK2, and Rscript.
 

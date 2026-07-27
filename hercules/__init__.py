@@ -8,4 +8,4 @@ from .stages import STAGES, StageSpec, get_stage
 
 __all__ = ["STAGES", "StageSpec", "__version__", "get_stage"]
 
-__version__ = "0.1.0.dev0"
+__version__ = "1.0.1"

@@ -15,6 +15,8 @@ inputs:
       other_allele: A2
       beta: BETA
       standard_error: SE
+      # FastGWA/magenpy calls this P/PVAL, but HERCULES requires a precomputed
+      # per-SNP prior variance here, not an association P-value.
       p_value: P
       sample_size: N
     target_columns:
@@ -25,6 +27,8 @@ inputs:
       other_allele: A2
       beta: BETA
       standard_error: SE
+      # FastGWA/magenpy calls this P/PVAL, but HERCULES requires a precomputed
+      # per-SNP prior variance here, not an association P-value.
       p_value: P
       sample_size: N
   # Raw annotations are recorded and validated here. The currently recovered
@@ -64,6 +68,12 @@ m1:
   sigma_epsilon_steps: 10
   max_iter: 500
   sumstats_format: fastgwa
+  per_snp_prior:
+    enabled: true
+    source: summary_statistics
+    column: PVAL
+    input_type: variance
+    fixed_during_inference: true
   validation_phenotype: /work/data/phenotype/AFR.validation.pheno
   validation_keep: /work/data/phenotype/AFR.validation.keep
 m2:
@@ -73,6 +83,12 @@ m2:
   sigma_epsilon_steps: 10
   max_iter: 500
   sumstats_format: fastgwa
+  per_snp_prior:
+    enabled: true
+    source: summary_statistics
+    column: PVAL
+    input_type: variance
+    fixed_during_inference: true
   validation_genotype: /work/data/genotypes/EUR_validation_chr{chrom}
   validation_phenotype: /work/data/phenotype/EUR.validation.pheno
   validation_keep: /work/data/phenotype/EUR.validation.keep

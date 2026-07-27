@@ -51,6 +51,41 @@ def test_model_sections_accept_method_specific_parameters(
     assert config.m3["additional_rho"] == 0.25
 
 
+def test_m1_and_m2_accept_explicit_fixed_per_snp_prior(
+    tmp_path: Path, config_mapping: dict[str, object]
+) -> None:
+    prior = {
+        "enabled": True,
+        "source": "summary_statistics",
+        "column": "PVAL",
+        "input_type": "variance",
+        "fixed_during_inference": True,
+    }
+    config_mapping["m1"] = {**config_mapping["m1"], "per_snp_prior": prior}
+    config_mapping["m2"] = {**config_mapping["m2"], "per_snp_prior": prior}
+    path = tmp_path / "fixed-prior.yaml"
+    path.write_text(json.dumps(config_mapping), encoding="utf-8")
+
+    config = load_config(path)
+
+    assert config.m1["per_snp_prior"]["column"] == "PVAL"
+    assert config.m2["per_snp_prior"]["fixed_during_inference"] is True
+
+
+def test_non_fixed_per_snp_prior_is_rejected(
+    tmp_path: Path, config_mapping: dict[str, object]
+) -> None:
+    config_mapping["m1"] = {
+        **config_mapping["m1"],
+        "per_snp_prior": {"fixed_during_inference": False},
+    }
+    path = tmp_path / "non-fixed-prior.yaml"
+    path.write_text(json.dumps(config_mapping), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="fixed_during_inference must be true"):
+        load_config(path).validate(check_paths=False)
+
+
 @pytest.mark.parametrize(
     ("key", "value", "message"),
     [

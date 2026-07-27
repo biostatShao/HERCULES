@@ -187,6 +187,7 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
                         _format_path(validation_keep, chromosome=chromosome, ancestry=ancestry),
                     ]
                 )
+            command.extend(_per_snp_prior_cli_args(model_config))
             result = run_process(command, env=_scientific_subprocess_environment(config))
             Path(f"{stage_prefix}.runner.stdout.log").write_text(result.stdout, encoding="utf-8")
             Path(f"{stage_prefix}.runner.stderr.log").write_text(result.stderr, encoding="utf-8")
@@ -352,6 +353,20 @@ def _hyperparameter_search_code(config: dict[str, Any]) -> str:
     return {"grid": "GS", "gs": "GS", "em": "EM", "bma": "BMA", "bo": "BO"}.get(
         value, value.upper()
     )
+
+
+def _per_snp_prior_cli_args(model_config: dict[str, Any]) -> list[str]:
+    """Translate the stage-specific fixed prior configuration for fit_cli."""
+
+    prior = model_config.get("per_snp_prior", {})
+    if not prior.get("enabled", True):
+        return []
+    return [
+        "--fixed-per-snp-prior-column",
+        str(prior.get("column", "PVAL")),
+        "--per-snp-prior-input-type",
+        str(prior.get("input_type", "variance")),
+    ]
 
 
 def _fit_command_prefix() -> tuple[str, ...]:

@@ -180,6 +180,46 @@ class HerculesConfig:
                 self.base_ancestry,
             ),
         ):
+            prior = model_config.get("per_snp_prior", {})
+            if not isinstance(prior, Mapping):
+                errors.append(f"{stage_name}.per_snp_prior must be a mapping")
+            else:
+                allowed_prior_keys = {
+                    "enabled",
+                    "source",
+                    "column",
+                    "input_type",
+                    "fixed_during_inference",
+                }
+                unknown_prior_keys = set(prior) - allowed_prior_keys
+                if unknown_prior_keys:
+                    errors.append(
+                        f"{stage_name}.per_snp_prior has unknown keys: "
+                        + ", ".join(sorted(str(key) for key in unknown_prior_keys))
+                    )
+                if not isinstance(prior.get("enabled", True), bool):
+                    errors.append(f"{stage_name}.per_snp_prior.enabled must be boolean")
+                elif not prior.get("enabled", True):
+                    errors.append(
+                        f"{stage_name}.per_snp_prior.enabled must be true for the "
+                        "validated HERCULES M1/M2 workflow"
+                    )
+                if prior.get("source", "summary_statistics") != "summary_statistics":
+                    errors.append(
+                        f"{stage_name}.per_snp_prior.source must be 'summary_statistics'"
+                    )
+                column = prior.get("column", "PVAL")
+                if not isinstance(column, str) or not column.strip():
+                    errors.append(f"{stage_name}.per_snp_prior.column must be a non-empty string")
+                if prior.get("input_type", "variance") not in {"variance", "precision"}:
+                    errors.append(
+                        f"{stage_name}.per_snp_prior.input_type must be 'variance' or 'precision'"
+                    )
+                if prior.get("fixed_during_inference", True) is not True:
+                    errors.append(
+                        f"{stage_name}.per_snp_prior.fixed_during_inference must be true"
+                    )
+
             if str(model_config.get("grid_metric", "validation")) != "validation":
                 continue
             validation_phenotype = str(model_config.get("validation_phenotype", ""))
@@ -465,6 +505,11 @@ def _validate_schema(data: Mapping[str, Any]) -> None:
     for key in ("m1", "m2", "m3", "ensemble"):
         model_section = _require_mapping(data[key], key)
         _require_string_keys(model_section, key)
+        if key in {"m1", "m2"} and "per_snp_prior" in model_section:
+            prior_section = _require_mapping(
+                model_section["per_snp_prior"], f"{key}.per_snp_prior"
+            )
+            _require_string_keys(prior_section, f"{key}.per_snp_prior")
 
     for section_name, keys in (("checkpoint", ("enabled", "resume")),):
         section = _require_mapping(data[section_name], section_name)

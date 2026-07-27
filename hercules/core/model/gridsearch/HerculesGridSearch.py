@@ -103,7 +103,9 @@ class HerculesGridSearch(HerculesGrid):
         self.sigma_epsilon = self.sigma_epsilon[best_model_idx]
 
         # Update sigma beta:
-        if isinstance(self.tau_beta, dict):
+        if self._fixed_tau_beta is not None:
+            self.tau_beta = self._copy_fixed_tau_beta()
+        elif isinstance(self.tau_beta, dict):
             for c in self.tau_beta:
                 self.tau_beta[c] = self.tau_beta[c][:, best_model_idx]
         else:
