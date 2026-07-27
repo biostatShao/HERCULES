@@ -187,6 +187,7 @@ HERCULES("hercules.yaml")
 Python owns configuration, orchestration, manifests, checkpoints, and external
 process handling. R is used only for the final validated ensemble procedure.
 
+<<<<<<< HEAD
 ## Scientific validation status
 
 The implementation is executable end to end on the validated Linux platform.
@@ -227,6 +228,8 @@ Therefore:
 
 See [VALIDATION.md](VALIDATION.md) for the executed checks and their limits.
 
+=======
+>>>>>>> 0c8fb05b25fef0805633b7d534feac5ff590a5ce
 ## License and attribution
 
 HERCULES is distributed under the MIT License. Required upstream copyright and
