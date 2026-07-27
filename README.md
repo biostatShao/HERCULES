@@ -1,169 +1,185 @@
 # HERCULES
-![image](https://github.com/biostatShao/HERCULES/blob/main/image.png)
-Hierarchical Bayesian model with Variational inference and functional Annotation integration for Cross-ancestry prediction
-===========================================================================
-# 1 Overview
 
-We introduce HERCULES  (Hierarchical Bayesian model with Variational inference and functional Annotation integration for Cross-ancestry prediction), a novel cross-population PRS framework employing a three-tiered Bayesian architecture that facilitates coordinated information transfer across diverse populations. The hierarchical structure operates through three functionally integrated components. Firstly, an ancestry-specific inference layer employing annotation-informed Gaussian mixture models to derive population-specific variational posteriors, addressing localized linkage disequilibrium patterns while enabling regularized parameter sharing. Secondly, a cross-ancestry calibration layer utilizing dynamic beta-shrinkage priors that bidirectionally propagate uncertainty estimates across populations, thereby balancing ancestral specificity with shared genetic architecture. Thirdly, polygenic synthesis layer integrating population-specific and cross-ancestry signals through an ensemble super-learner approach with genotype-optimized weighting, employing stacked regression to enhance generalizability while reducing ancestry-related overfitting.
+HERCULES is a cross-ancestry polygenic risk score workflow with three model
+stages and a final ensemble:
 
-# 2 Installation Instructions
-Our software is built on Python version 3.8 or later. To ensure optimal performance and compatibility, we strongly recommend creating a dedicated environment using Conda before installation.
-### 2.1 Setting Up the Environment
-1. Install Conda: If you do not have Conda installed, download and install it from the official Conda website (https://repo.anaconda.com/archive/index.html).
-2. Create a Conda Environment:
-```python
-conda create -n HERCULES python=3.11
-```
-3. Activate the Environment:
-```python
-conda activate HERCULES
-```
-4. Installing Dependencies:
-Install `magenpy` using pip
-```python
-pip install magenpy
-```
-### 2.2 Building Extensions
-1. Ensure the Conda environment is activated.
-2. Navigate to the directory containing the setup.py file for the software.
-3. Run the following command to build the extensions in place:
-```python
-python setup.py build_ext --inplace
+- M1 fits the target-ancestry model grid and scores the target genotype.
+- M2 fits the base-ancestry model grid and scores the target genotype.
+- M3 integrates the paired M1 and M2 posterior tables.
+- The ensemble combines selected and grid scores for quantitative or binary
+  traits.
+
+All public interfaces use one name:
+
+```text
+Python package: hercules
+Command line:   hercules
+R function:     HERCULES()
+Configuration:  hercules.yaml
+Outputs:        HERCULES_M1, HERCULES_M2, HERCULES_M3, HERCULES_ensemble
 ```
 
-## 3 Usage Instructions
+## Supported platform
 
-### 3.1 Input Files
+The validated platform is Linux x86-64 with Python 3.11. HERCULES contains
+Cython/C++/OpenMP extensions, so installation from source requires a C/C++
+compiler. Native Windows installation has not been validated; Windows users
+should use WSL2, a Linux server, or a Linux container.
 
-#### 3.1.1 Compute Linkage-Disequilibrium (LD) matrices using `magenpy`
+The complete workflow also needs:
 
-The magenpy_ld script is used to compute Linkage-Disequilibrium (LD) matrices, which record the pairwise SNP-by-SNP correlations from a sample of genotype data stored in plink's BED format. The script offers an interface to compute LD matrices by simply specifying the path to the genotype files, the type of LD estimator to use, the subset of variants or samples to keep, and the output directory.
-The command processes genotype data for chromosome 1 of the EAS population：
-```python
-/home/bin/magenpy_ld \
-    --bfile ./1KG/sas/hm3_cM_chr1 \
-    --min-mac 5 \
-    --backend xarray \
-    --estimator block \
-    --ld-blocks ./EAS_block_coords.bed \
-    --storage-dtype int16 \
-    --compressor zstd \
-    --compression-level 9 \
-    --compute-spectral-properties \
-    --temp-dir ./temp \
-    --output-dir ./SAS/
+- PLINK 1.9;
+- PLINK2;
+- R with `data.table`, `SuperLearner`, `glmnet`, and `pROC`;
+- legal user-provided GWAS, LD, genotype, phenotype, and annotation inputs.
+
+## Installation
+
+### Download or clone, then install
+
+This is the recommended installation method because it compiles the native
+extensions for the user's own Linux environment instead of relying on a wheel
+built on another computer.
+
+```bash
+git clone https://github.com/biostatShao/HERCULES.git
+cd HERCULES
+
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
 ```
 
-#### 3.1.2 Annotation File
+Development installation:
 
-##### 3.1.2.1
+```bash
+python -m pip install -e ".[test]"
+pytest
+```
 
-First, you need to infer the heritability of each SNP using the S-LDSC model (Baseline-LD annotation can be downloaded [here](https://data.broadinstitute.org/alkesgroup/LDSCORE/)) and use summary statistics that will later be used for training. When running S-LDSC, make sure to use the `--print-coefficients` flag to obtain the regression coefficients.
+Direct installation from GitHub is also possible after the repository is
+published:
 
-##### 3.1.2.2
+```bash
+python -m pip install "git+https://github.com/biostatShao/HERCULES.git"
+```
 
-After running S-LDSC:
+Prebuilt wheels may be added later for individually tested Python/platform
+combinations. A single wheel is not portable across arbitrary operating
+systems, Python versions, or CPU architectures.
 
-a. Obtain the `h2g` estimate from the `*.log` file.
+## Verify the installation
 
-b. Retrieve the regression coefficients from the `*.results` file (8th column). Divide the regression coefficients by `h2g` and define it as `T=tau/h2g`. This results in a vector of dimension `C*1`, where `C` is the total number of annotations.
+```bash
+hercules --version
+hercules --help
+hercules doctor
+```
 
-c. From the Baseline-LD annotation downloaded [here](https://data.broadinstitute.org/alkesgroup/LDSCORE/), read the annotation file `baselineLD.*.annot.gz` and retain only the annotation columns (i.e., remove the first 4 columns). This matrix is denoted as `X` with dimensions `M*C`, where `M` is the number of SNPs and `C` is the total number of annotations.
+With a configured workflow:
 
-d. Define the expected heritability of each SNP as an `M*1` vector, which is the result of matrix `X` multiplied by `T`.
+```bash
+hercules doctor --config hercules.yaml
+hercules config validate hercules.yaml
+```
 
-The final file format is:
-- Column 1: SNP ID
-- Column 2: Heritability of each SNP
+## Run the included example
 
-#### 3.1.3 GWAS Summary Statistics File
+The repository contains a small deterministic two-ancestry dataset under
+`examples/data/`. It contains 160 samples per ancestry and 64 variants on
+chromosome 22. It contains no private research data.
 
-The file must adhere strictly to the following format:
-- `CHR`: Chromosome
-- `SNP`: SNP ID
-- `BP`: Physical position (base pairs)
-- `A1`: Minor allele name
-- `A2`: Major allele name
-- `P`: GWAS p-value
-- `BETA`: Effect size
-- `Z`: Z-statistic
+The example configuration uses paths relative to the repository root. Update
+the three executable paths in the YAML files if PLINK, PLINK2, or Rscript are
+not on `PATH`.
 
-#### 3.1.4 Phenotype File
+```bash
+hercules config validate examples/data/hercules.quantitative.yaml
+hercules run --config examples/data/hercules.quantitative.yaml
 
-Format:
-- Column 1: UDI
-- Column 2: Phenotype
-- Column 3- (optional): Covariates
+hercules config validate examples/data/hercules.binary.yaml
+hercules run --config examples/data/hercules.binary.yaml
+```
 
-### 3.2 Input Parameters
+To regenerate the example instead of using the committed fixture:
 
-- `traits`: Trait name (e.g., Height). The prefix of the summary data file should be consistent (e.g., Height_sums.txt). Directory name for output files.
-- `chr`: Chromosome number (e.g., 1)
-- `N`: The GWAS sample size
-- `h2`: Estimated SNP Heritability (pre-compute this using your favorite method).
-- `sums_p`: Absolute path to the summary data (e.g., `/your/path/sum_file/`)
-- `base_p`: Prefix of Plink format LD data files, without the chromosome number (e.g., for chromosome 1, the file is `/your/path/plink/eur_hm3_chr1`, so enter `/your/path/plink/eur_hm3_chr`)
-- `target_p`: Prefix of Plink format test set data files, without the chromosome number (e.g., for chromosome 1, the file is `/your/path/plink/ukb22828_eur_hm3_chr1`, so enter `/your/path/plink/ukb22828_eur_hm3_chr`)
-- `pheno`: Phenotype file and its absolute path. If covariates are included, they should be in this file (e.g., `/your/path/ukbb.phen`)
-- `phe_trait`: Column name of the outcome in the phenotype file (e.g., Height)
-- `out`: Output path for result files (e.g., `/your/path/out/`)
-- `temp`: Output path for temporary files (e.g., `/your/path/temp/`)
-- `cova`: Covariates to consider; if none, enter `NULL` (e.g., `c("BaseAge","Sexgenetic")`)
-- `bina`: Whether the outcome is binary data (e.g., `T`)
-- `ct_result`: Whether to output 11 tissue-specific PRS prediction levels (e.g., `T`)
-- `software_path`: The directory to HERCULES (e.g., `/your/path/`)
-- `plink_path`: The directory to PLINK1.9 and PLINK2.0
+```bash
+python examples/synthetic/generate_fixture.py \
+  --output examples/data \
+  --plink /path/to/plink \
+  --plink2 /path/to/plink2 \
+  --rscript /path/to/Rscript
+```
 
-## 3.3 Running
+## Configure a real analysis
 
-Below is an example of running the HERCULES package:
+Copy the template and replace its paths:
+
+```bash
+cp examples/hercules.example.yaml hercules.yaml
+hercules config validate hercules.yaml
+hercules run --config hercules.yaml
+```
+
+Individual dependency-aware stages are available:
+
+```bash
+hercules stage m1 --config hercules.yaml
+hercules stage m2 --config hercules.yaml
+hercules stage m3 --config hercules.yaml
+hercules ensemble --config hercules.yaml
+```
+
+Requesting M3 or the ensemble automatically runs missing prerequisite stages.
+Checkpoints include the trait, chromosome, stage, and configuration hash.
+
+Configuration precedence is:
+
+```text
+CLI override > HERCULES__... environment variable > YAML > package default
+```
+
+## R interface
 
 ```r
-# R version
-R 4.1.2
-
-# Set parameters
- base_p = "/data2/projects/bioinfo/zhshao/ukb5keur/"
-base_f = "ukb22828_eur_refld_chr"
-target_p = "/data2/projects/bioinfo/zhshao/UKB_hm3eur/"
-target_f = "ukb22828_eur_hm3_chr"
-pheno = "/data2/projects/bioinfo/zhshao/GRS/ukbb.phen"
-temp = "/data2/projects/bioinfo/zhshao/GRS/temp/"
-cova = c("BaseAge","Sexgenetic",paste0("PC",1:10))
-
-traits = c("Height_AFR")[taa]
-
-bina = F
-sums_p = "/data2/projects/bioinfo/zhshao/GWAS.summary/sums/GIANT/"
-
-out = "/home/zhshao/project/GRS/111_result/1-quan/"
-phe_trait = strsplit(traits,"_")[[1]][1]; print(traits)
-base_pop = "EUR"
-target_pop = strsplit(traits,"_")[[1]][2]
-base_p = paste0("/data2/projects/bioinfo/zhshao/LD_reference/1000G/1KG/",tolower(strsplit(traits,"_")[[1]][2]),"/")
-base_f = "hm3_cM_chr"
-target_p = paste0("/data2/projects/bioinfo/zhshao/LD_reference/UKB/genotype/",
-                  strsplit(traits,"_")[[1]][2],"/")
-target_f = "ukb_hm3_chr"
-pheno = paste0("/data2/projects/bioinfo/zhshao/GRS/ukbb_",tolower(strsplit(traits,"_")[[1]][2]),".phen")
-
-# Set GWAS summary file path
-sums_p <- paste0(sums_p, traits, "/")
-
-# Run HERCULES for each chromosome
-for (chr in 1:22) {
-  HERCULES(GRS.input, traits, chr, sums_p, base_pop, target_pop,
-                    base_p, base_f,target_p, target_f,cova = NULL,
-                    sums_out="/data2/projects/bioinfo/zhshao/GWAS.summary/cross_pop/",
-                    pheno, phe_trait, out, temp, bina = F)
-}
+source("R/HERCULES.R")
+HERCULES("hercules.yaml")
 ```
 
-## Acknowledgments
-Special thanks to Shadi [https://github.com/shz9/viprs] for providing the foundational code for this software.
+Python owns configuration, orchestration, manifests, checkpoints, and external
+process handling. R is used only for the final validated ensemble procedure.
 
-## Contact
-We are very grateful to any questions, comments, or bugs reports; and please contact [Zhonghe Shao](https://github.com/biostatShao) via zhonghe@hust.edu.cn.
+## Scientific validation status
 
-## Update
-2024-12-02 HERCULES version 0.0.1
+The implementation is executable end to end on the validated Linux platform.
+The clean package passed 48 automated tests. Quantitative and binary examples
+completed from an isolated installation. A table-by-table comparison against
+the pre-unification deterministic reference run covered M1 and M2 selected and
+grid scores, M3 scores, posterior tables, ensemble inputs, predictions, and
+metrics; every compared numeric value had a maximum absolute difference of
+`0.0`.
+
+The quantitative example completed in 35.76 seconds with 247,732 KiB peak
+resident memory and produced R2 = 0.019599803263548. The binary example
+completed in 26.39 seconds with 216,956 KiB peak resident memory and produced
+AUC = 0.683862433862434. These values validate packaging and deterministic
+execution, not scientific performance on real data.
+
+One historical M3 comparison passed at `rtol=1e-8, atol=1e-10`. Historical M1
+and M2 replays retained exact schemas and SNP order but did not pass the
+predefined float32 tolerance. Raw annotation-to-per-SNP preprocessing remains
+an upstream input-preparation responsibility.
+
+Therefore:
+
+> The refactor was designed to preserve the identified scientific defaults,
+> but full scientific equivalence has not yet been demonstrated.
+
+See [VALIDATION.md](VALIDATION.md) for the executed checks and their limits.
+
+## License and attribution
+
+HERCULES is distributed under the MIT License. Required upstream copyright and
+derivative-work attribution are preserved in [LICENSE](LICENSE) and
+[NOTICE](NOTICE).

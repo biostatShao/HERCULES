@@ -1,0 +1,6 @@
+include LICENSE NOTICE CITATION.cff README.md CHANGELOG.md CONTRIBUTING.md VALIDATION.md
+recursive-include hercules *.py *.pyx *.pxd *.hpp py.typed *.R *.yaml
+recursive-include R *.R
+recursive-include examples *
+prune examples/output
+global-exclude *.py[cod] *.so *.pyd __pycache__ *.log

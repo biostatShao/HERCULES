@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use HERCULES, cite the HERCULES manuscript and preserve the attribution described in NOTICE."
+title: "HERCULES"
+type: software
+version: 0.1.0.dev0
+authors:
+  - family-names: Shao
+    given-names: Zhonghe
+repository-code: "https://github.com/biostatShao/HERCULES"
+license: MIT

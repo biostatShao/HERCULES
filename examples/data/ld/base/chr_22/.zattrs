@@ -1,0 +1,8 @@
+{
+    "Chromosome": 22,
+    "Estimator properties": {
+        "Window size": 64
+    },
+    "LD estimator": "windowed",
+    "Sample size": 160
+}

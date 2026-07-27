@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux-python311:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install build and test dependencies
+        run: python -m pip install --upgrade pip build pytest
+      - name: Build sdist and native wheel
+        run: python -m build
+      - name: Install wheel outside the checkout
+        run: |
+          python -m venv /tmp/hercules-wheel
+          /tmp/hercules-wheel/bin/pip install --upgrade pip
+          /tmp/hercules-wheel/bin/pip install dist/*.whl pytest
+          cd /tmp
+          /tmp/hercules-wheel/bin/python -c "import hercules; from hercules.core.model.vi import e_step, e_step_cpp; print(hercules.__version__)"
+          /tmp/hercules-wheel/bin/hercules --version
+          /tmp/hercules-wheel/bin/hercules --help
+          rm -rf /tmp/hercules-test-workspace
+          mkdir /tmp/hercules-test-workspace
+          cp -R "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/R" "$GITHUB_WORKSPACE/examples" /tmp/hercules-test-workspace/
+          cd /tmp/hercules-test-workspace
+          /tmp/hercules-wheel/bin/python -m pytest
+      - name: Install source distribution outside the checkout
+        run: |
+          python -m venv /tmp/hercules-sdist
+          /tmp/hercules-sdist/bin/pip install --upgrade pip
+          /tmp/hercules-sdist/bin/pip install dist/*.tar.gz
+          cd /tmp
+          /tmp/hercules-sdist/bin/python -c "import hercules; from hercules.core.model.vi import e_step, e_step_cpp; print(hercules.__version__)"
+          /tmp/hercules-sdist/bin/hercules --version
+          /tmp/hercules-sdist/bin/hercules --help

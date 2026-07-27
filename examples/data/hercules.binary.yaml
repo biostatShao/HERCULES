@@ -1,0 +1,66 @@
+trait_name: synthetic_binary
+chromosomes: ["22"]
+base_ancestry: BASE
+target_ancestry: TARGET
+
+inputs:
+  summary_statistics:
+    base_path: examples/data/base.fastGWA.tsv
+    target_path: examples/data/target.fastGWA.tsv
+    base_columns: {}
+    target_columns: {}
+  functional_annotation: examples/data/functional_annotation.tsv
+  per_snp_heritability: examples/data/per_snp_heritability.tsv
+  ld_reference:
+    base: examples/data/ld/base/chr_22
+    target: examples/data/ld/target/chr_22
+  genotype_prefixes:
+    base_validation: examples/data/genotypes/base/base
+    target: examples/data/genotypes/target/target
+  validation_genotype: examples/data/genotypes/target/target
+  phenotype_file: examples/data/target.phenotype.tsv
+  phenotype_column: binary
+  covariates: []
+  trait_type: binary
+
+output_dir: examples/output/binary
+temporary_dir: examples/output/binary/tmp
+
+tools:
+  plink: plink
+  plink2: plink2
+  rscript: Rscript
+
+execution:
+  threads: 1
+  parallel_jobs: 1
+  seed: 7209
+
+m1:
+  hyperparameter_search: grid
+  pi_steps: 10
+  sigma_epsilon_steps: 10
+  sumstats_format: fastgwa
+  validation_keep: examples/data/target.validation.keep
+  validation_phenotype: examples/data/target.validation.binary.pheno
+m2:
+  hyperparameter_search: grid
+  pi_steps: 10
+  sigma_epsilon_steps: 10
+  sumstats_format: fastgwa
+  validation_genotype: examples/data/genotypes/base/base
+  validation_keep: examples/data/base.validation.keep
+  validation_phenotype: examples/data/base.validation.binary.pheno
+m3:
+  max_iter: 1000
+  tol: 1.0e-6
+ensemble:
+  quantitative_learners: [SL.glmnet, SL.ridge]
+  binary_selection: best_individual_auc
+checkpoint:
+  enabled: true
+  resume: true
+logging:
+  level: INFO
+  file: ""
+

@@ -1,0 +1,91 @@
+trait_name: example_trait
+chromosomes: [1, 2]
+base_ancestry: EUR
+target_ancestry: AFR
+
+inputs:
+  summary_statistics:
+    base_path: /work/data/sumstats/EUR/chr_{chrom}.fastGWA
+    target_path: /work/data/sumstats/AFR/chr_{chrom}.fastGWA
+    base_columns:
+      chromosome: CHR
+      snp: SNP
+      position: POS
+      effect_allele: A1
+      other_allele: A2
+      beta: BETA
+      standard_error: SE
+      p_value: P
+      sample_size: N
+    target_columns:
+      chromosome: CHR
+      snp: SNP
+      position: POS
+      effect_allele: A1
+      other_allele: A2
+      beta: BETA
+      standard_error: SE
+      p_value: P
+      sample_size: N
+  # Raw annotations are recorded and validated here. The currently recovered
+  # runtime expects their derived per-SNP values to be present in the prepared
+  # summary-statistics input; raw annotation-to-weight estimation is upstream.
+  functional_annotation: /work/data/annotations/functional_annotation.tsv
+  per_snp_heritability: /work/data/annotations/per_snp_heritability.tsv
+  ld_reference:
+    base: /work/data/ld/EUR/chr_{chrom}
+    target: /work/data/ld/AFR/chr_{chrom}
+  genotype_prefixes:
+    base_validation: /work/data/genotypes/EUR_validation_chr{chrom}
+    target: /work/data/genotypes/AFR_target_chr{chrom}
+  validation_genotype: /work/data/genotypes/AFR_validation_chr{chrom}
+  phenotype_file: /work/data/phenotype/AFR.target.tsv
+  phenotype_column: phenotype
+  covariates: [age, sex, PC1, PC2]
+  trait_type: quantitative
+
+output_dir: /work/results/example_trait
+temporary_dir: /work/results/example_trait/tmp
+
+tools:
+  plink: plink
+  plink2: plink2
+  rscript: Rscript
+
+execution:
+  threads: 1
+  parallel_jobs: 1
+  seed: 7209
+
+m1:
+  hyperparameter_search: grid
+  grid_metric: validation
+  pi_steps: 10
+  sigma_epsilon_steps: 10
+  max_iter: 500
+  sumstats_format: fastgwa
+  validation_phenotype: /work/data/phenotype/AFR.validation.pheno
+  validation_keep: /work/data/phenotype/AFR.validation.keep
+m2:
+  hyperparameter_search: grid
+  grid_metric: validation
+  pi_steps: 10
+  sigma_epsilon_steps: 10
+  max_iter: 500
+  sumstats_format: fastgwa
+  validation_genotype: /work/data/genotypes/EUR_validation_chr{chrom}
+  validation_phenotype: /work/data/phenotype/EUR.validation.pheno
+  validation_keep: /work/data/phenotype/EUR.validation.keep
+m3:
+  max_iter: 1000
+  tol: 1.0e-6
+ensemble:
+  quantitative_learners: [SL.glmnet, SL.ridge]
+  binary_selection: best_individual_auc
+
+checkpoint:
+  enabled: true
+  resume: true
+logging:
+  level: INFO
+  file: ""

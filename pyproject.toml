@@ -1,0 +1,63 @@
+[build-system]
+requires = [
+  "setuptools>=69",
+  "wheel",
+  "Cython>=3.0,<4",
+  "numpy>=1.26,<2",
+  "scipy>=1.10,<=1.15.3",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hercules-prs"
+dynamic = ["version"]
+description = "HERCULES cross-ancestry polygenic risk score workflow"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Zhonghe Shao", email = "zhonghe@hust.edu.cn"},
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "joblib>=1.2",
+  "magenpy==0.1.4",
+  "numpy>=1.26,<2",
+  "pandas>=1.5,<=2.2.1",
+  "psutil>=5.9",
+  "PyYAML>=6",
+  "scipy>=1.10,<=1.15.3",
+  "scikit-learn>=1.2,<=1.6.1",
+  "statsmodels>=0.13,<=0.14.4",
+  "tqdm>=4.64",
+]
+
+[project.optional-dependencies]
+plot = ["seaborn>=0.12"]
+test = ["build>=1.2", "pytest>=8", "pytest-cov>=5"]
+docs = []
+
+[project.scripts]
+hercules = "hercules.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "hercules.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hercules*"]
+exclude = ["main*", "tests*", "benchmarks*"]
+
+[tool.setuptools.package-data]
+hercules = ["py.typed", "data/**/*.R", "data/**/*.yaml"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

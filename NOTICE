@@ -1,0 +1,14 @@
+HERCULES is a maintained derivative of and extension to VIPRS.
+
+The inherited implementation is licensed under the MIT License. The required
+upstream copyright notice is preserved in LICENSE:
+
+  Copyright (c) 2024 Shadi Zabad, McGill University
+
+Upstream project: https://github.com/shz9/viprs
+
+The presence of inherited code does not imply that unchanged upstream
+components were newly invented by HERCULES. All public package names, commands,
+module paths, configuration files, and outputs in this repository use the
+HERCULES name.
+

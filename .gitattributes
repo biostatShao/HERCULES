@@ -1,0 +1,16 @@
+* text=auto
+
+*.py text eol=lf
+*.pyx text eol=lf
+*.pxd text eol=lf
+*.hpp text eol=lf
+*.R text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.tsv text eol=lf
+*.vcf text eol=lf
+*.bim text eol=lf
+*.fam text eol=lf
+*.bed binary
