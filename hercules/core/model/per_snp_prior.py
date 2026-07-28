@@ -1,4 +1,4 @@
-"""Validation and conversion for fixed per-SNP effect-size priors."""
+"""Validation and conversion for per-SNP tau_beta initialization."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 
 
-def prepare_fixed_per_snp_precision(
+def prepare_initial_per_snp_precision(
     values: Any,
     *,
     input_type: str,
@@ -16,11 +16,13 @@ def prepare_fixed_per_snp_precision(
     float_precision: str,
     order: str = "F",
 ) -> np.ndarray:
-    """Return an ``(n_snps, 1)`` array of fixed prior precisions.
+    """Return an ``(n_snps, 1)`` array of initial prior precisions.
 
     HERCULES uses ``tau_beta`` as a precision (inverse variance).  The public
-    workflow stores the precomputed per-SNP variance in the FastGWA ``P``
-    column, which magenpy exposes to the model as ``PVAL``.
+    workflow temporarily stores the precomputed per-SNP variance in the
+    FastGWA ``P`` column, which magenpy exposes to the model as ``PVAL``. These
+    values initialize the first E-step; subsequent M-steps update ``tau_beta``
+    with the model's standard EM equation.
     """
 
     array = np.asarray(values)

@@ -4,10 +4,9 @@ import logging
 from tqdm import tqdm
 
 from hercules.core.model.HerculesModel import HerculesModel
-from hercules.core.model.per_snp_prior import prepare_fixed_per_snp_precision
+from hercules.core.model.per_snp_prior import prepare_initial_per_snp_precision
 from ..vi.e_step import e_step_grid
 from ..vi.e_step_cpp import cpp_e_step_grid
-from hercules.core.utils.compute_utils import dict_mean
 from hercules.core.utils.OptimizeResult import OptimizeResult
 
 
@@ -34,7 +33,7 @@ class HerculesGrid(HerculesModel):
     def __init__(self,
                  gdl,
                  grid,
-                 fixed_per_snp_prior_column=None,
+                 initial_per_snp_prior_column=None,
                  per_snp_prior_input_type='variance',
                  **kwargs):
         """
@@ -67,47 +66,47 @@ class HerculesGrid(HerculesModel):
         self.shapes = {c: (shp, self.n_models)
                        for c, shp in self.shapes.items()}
         self.Nj = {c: Nj[:, None].astype(self.float_precision, order=self.order) for c, Nj in self.Nj.items()}
-        self.fixed_per_snp_prior_column = fixed_per_snp_prior_column
+        self.initial_per_snp_prior_column = initial_per_snp_prior_column
         self.per_snp_prior_input_type = per_snp_prior_input_type
-        self._fixed_tau_beta = None
-        if self.fixed_per_snp_prior_column is not None:
+        self._initial_tau_beta = None
+        if self.initial_per_snp_prior_column is not None:
             if 'sigma_epsilon' not in self.fix_params:
                 raise ValueError(
-                    "A fixed per-SNP prior requires a fixed sigma_epsilon grid so "
+                    "A per-SNP tau_beta initialization requires a fixed sigma_epsilon grid so "
                     "that residual-variance initialization remains model-specific."
                 )
-            self._fixed_tau_beta = {}
+            self._initial_tau_beta = {}
             for chromosome in self.shapes:
                 try:
                     values = self.gdl.sumstats_table[chromosome].get_col(
-                        self.fixed_per_snp_prior_column
+                        self.initial_per_snp_prior_column
                     )
                 except (KeyError, AttributeError) as exc:
                     raise ValueError(
                         f"Summary statistics for chromosome {chromosome} do not "
-                        f"contain the configured per-SNP prior column "
-                        f"{self.fixed_per_snp_prior_column!r}."
+                        f"contain the configured per-SNP initialization column "
+                        f"{self.initial_per_snp_prior_column!r}."
                     ) from exc
                 if values is None:
                     raise ValueError(
                         f"Summary statistics for chromosome {chromosome} do not "
-                        f"contain the configured per-SNP prior column "
-                        f"{self.fixed_per_snp_prior_column!r}."
+                        f"contain the configured per-SNP initialization column "
+                        f"{self.initial_per_snp_prior_column!r}."
                     )
                 if len(values) != self.shapes[chromosome][0]:
                     raise ValueError(
                         f"Per-SNP prior length for chromosome {chromosome} does not "
                         "match the harmonized SNP count."
                     )
-                self._fixed_tau_beta[chromosome] = prepare_fixed_per_snp_precision(
+                self._initial_tau_beta[chromosome] = prepare_initial_per_snp_precision(
                     values,
                     input_type=self.per_snp_prior_input_type,
-                    column=self.fixed_per_snp_prior_column,
+                    column=self.initial_per_snp_prior_column,
                     chromosome=chromosome,
                     float_precision=self.float_precision,
                     order=self.order,
                 )
-            self.tau_beta = self._copy_fixed_tau_beta()
+            self.tau_beta = self._copy_initial_tau_beta()
 
         if not np.isscalar(self.lambda_min):
             self.lambda_min = self.lambda_min[:, None]
@@ -150,8 +149,8 @@ class HerculesGrid(HerculesModel):
 
         super().initialize_theta(theta_0=theta_0)
 
-        if self._fixed_tau_beta is not None:
-            self.tau_beta = self._copy_fixed_tau_beta()
+        if self._initial_tau_beta is not None:
+            self.tau_beta = self._copy_initial_tau_beta()
 
         if np.isscalar(self.pi):
             self.pi *= np.ones(shape=(self.n_models, ), dtype=self.float_precision)
@@ -168,17 +167,11 @@ class HerculesGrid(HerculesModel):
         if 'lambda_min' in self.fix_params:
             self.lambda_min = self.fix_params['lambda_min'].astype(self.float_precision)
 
-    def _copy_fixed_tau_beta(self):
+    def _copy_initial_tau_beta(self):
         return {
             chromosome: values.copy(order=self.order)
-            for chromosome, values in self._fixed_tau_beta.items()
+            for chromosome, values in self._initial_tau_beta.items()
         }
-
-    def update_tau_beta(self):
-        """Keep configured per-SNP precisions fixed during every M-step."""
-
-        if self._fixed_tau_beta is None:
-            super().update_tau_beta()
 
     def init_optim_meta(self):
         """
@@ -269,7 +262,7 @@ class HerculesGrid(HerculesModel):
         """
 
         if self.n_models == 1:
-            if self._fixed_tau_beta is None:
+            if not isinstance(self.tau_beta, dict):
                 return super(HerculesGrid, self).to_theta_table()
             average_effect_variance = np.asarray(
                 self.get_average_effect_size_variance()
@@ -292,13 +285,11 @@ class HerculesGrid(HerculesModel):
         h2 = self.get_heritability()
         pi = self.get_proportion_causal()
 
-        if self._fixed_tau_beta is not None:
+        if isinstance(self.tau_beta, dict):
             tau_summary = float(
                 np.mean(np.concatenate(list(self.tau_beta.values()), axis=0))
             )
             taus = np.repeat(tau_summary, self.n_models)
-        elif isinstance(self.tau_beta, dict):
-            taus = dict_mean(self.tau_beta, axis=0)
         else:
             taus = self.tau_beta
 

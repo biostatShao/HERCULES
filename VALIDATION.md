@@ -22,7 +22,7 @@ WSL2, a Linux server, or a Linux container.
 - `hercules --version`, `hercules --help`, configuration validation, dependency
   diagnostics, individual stage commands, the ensemble command, and the full
   run command were exercised.
-- All 66 automated tests passed.
+- All 67 automated tests passed.
 - The quantitative and binary examples both completed end to end.
 - The corrected quantitative workflow completed from a clean wheel
   installation outside the source checkout.
@@ -54,9 +54,9 @@ numeric difference was `0.0` for both the quantitative and binary workflows.
 This demonstrates that the packaging and public-name unification did not alter
 the deterministic example outputs.
 
-That comparison predates the fixed per-SNP prior correction. It must not be
-cited as an old-versus-new numerical equivalence result for the corrected
-prior-enabled implementation.
+That comparison predates the `var_prior` initialization pathway. It must not
+be cited as an old-versus-new numerical equivalence result for the current
+prior-initialized implementation.
 
 ## Corrected source-versus-wheel comparison
 
@@ -74,36 +74,37 @@ parallel job. The comparison covered:
 All compared schemas and non-numeric values matched exactly. The overall
 maximum absolute numeric difference was `0.0`.
 
-## Fixed per-SNP prior correction
+## Per-SNP tau_beta initialization
 
 The public FastGWA `P` column now retains its normal association P-value
 meaning. Before inference, HERCULES copies `var_prior` into the internal prior
 field; when `var_prior` is absent, it uses variance `1` for every SNP. The model
-converts this variance to prior precision and prevents initialization or M-step
-updates from replacing it. Input validation rejects non-numeric, non-finite,
-zero, and negative `var_prior` values.
+converts this variance to the initial precision `tau_beta_j = 1/var_prior_j`.
+The first E-step uses those per-SNP values, and every subsequent M-step updates
+`tau_beta` through the original EM equation. Input validation rejects
+non-numeric, non-finite, zero, and negative `var_prior` values.
 
-For the corrected quantitative run, the final mean `tau_beta` reported by M1
-and M2 was compared with `mean(1/var_prior)` computed directly from each
-stage's own FastGWA input. The absolute differences were `8.20e-7` for M1 and
-`1.07e-6` for M2, consistent with float32 model/output precision. The complete
-M1, M2, M3, scoring, and ensemble outputs also matched the preceding
-prior-enabled reference run exactly, with maximum absolute difference `0.0`.
-This confirms that the configured prior reached the completed inference run
-and was not replaced by the initialization or M-step update for this fixture.
+The current quantitative fixture completed M1, M2, M3, PRS scoring, and the
+ensemble with EM-updated `tau_beta`. With `var_prior`, the mean initial
+precisions were `28.690872819689226` for M1 and `29.610163927874936` for M2.
+The final selected-model values were `4150629.8` and `4093785.5`, respectively,
+demonstrating that the M-step replaced the initialization. The synthetic-data
+ensemble R2 was `0.0195895228003706`.
 
 A second complete quantitative run used copies of both FastGWA inputs with the
 `var_prior` column removed. Both internal M1/M2 tables contained only `1.0` in
-their prior field, both completed inference files reported `tau_beta = 1.0`,
-and M1, M2, M3, scoring, and the ensemble all completed. Its synthetic-data R2
-was `0.0355527675172468`.
+their initialization field and the complete workflow finished. Final
+`tau_beta` was `11099690.0` for M1 and `10656589.0` for M2, confirming that the
+all-ones fallback is also initialization only. Its synthetic-data ensemble R2
+was `0.019587977630768`.
 
 The 1.0.1 sdist and Linux CPython 3.11 wheel were then rebuilt. The wheel
 contained `hercules/sumstats.py`, the scientific Python modules, and all three
-native extensions. A clean environment outside the checkout installed that
-wheel and completed the prior-enabled quantitative workflow. Its compared
-tables matched the editable installation exactly, with maximum absolute
-difference `0.0`.
+native extensions. The rebuilt wheel was installed outside the source checkout
+and completed the prior-initialized, EM-updated quantitative workflow. Its M1,
+M2, M3, scoring, and ensemble tables matched the editable installation with a
+maximum absolute numeric difference of `0.0`; final M1/M2 `tau_beta` values
+were also identical.
 
 The recovered M3 implementation has no ancestry-bridging lambda variable and
 no Beta/Uniform lambda update. No placeholder or newly invented lambda

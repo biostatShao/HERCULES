@@ -172,9 +172,9 @@ def check_args(args):
             except ValueError:
                 "The lambda_min parameter must be set to 'infer' or non-negative number."
 
-    if args.fixed_per_snp_prior_column is not None and args.hyp_search not in ('GS', 'BMA'):
+    if args.initial_per_snp_prior_column is not None and args.hyp_search not in ('GS', 'BMA'):
         raise ValueError(
-            "Fixed per-SNP priors are currently supported by grid search and "
+            "Per-SNP tau_beta initialization is currently supported by grid search and "
             "Bayesian model averaging only."
         )
 
@@ -456,7 +456,7 @@ def prepare_model(args, verbose=True):
                           lambda_min=lambda_min,
                           dequantize_on_the_fly=args.dequantize_on_the_fly,
                           threads=args.threads,
-                          fixed_per_snp_prior_column=args.fixed_per_snp_prior_column,
+                          initial_per_snp_prior_column=args.initial_per_snp_prior_column,
                           per_snp_prior_input_type=args.per_snp_prior_input_type)
 
     else:
@@ -648,12 +648,13 @@ def main():
                         help='The overall sample size for the GWAS study. This must be provided if the '
                              'sample size per-SNP is not in the summary statistics file.')
     parser.add_argument(
-        '--fixed-per-snp-prior-column',
-        dest='fixed_per_snp_prior_column',
+        '--initial-per-snp-prior-column',
+        dest='initial_per_snp_prior_column',
         type=str,
         help=(
-            'Canonical magenpy summary-statistics column containing the fixed '
-            'per-SNP effect-size prior. FastGWA P is exposed as PVAL.'
+            'Canonical magenpy summary-statistics column containing the per-SNP '
+            'variance or precision used to initialize tau_beta. FastGWA P is '
+            'exposed as PVAL.'
         ),
     )
     parser.add_argument(
@@ -662,8 +663,8 @@ def main():
         choices={'variance', 'precision'},
         default='variance',
         help=(
-            'Interpret the configured per-SNP prior column as variance or '
-            'precision. HERCULES converts variance to tau_beta by inversion.'
+            'Interpret the configured per-SNP initialization column as variance '
+            'or precision. HERCULES converts variance to tau_beta by inversion.'
         ),
     )
 

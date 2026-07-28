@@ -218,7 +218,7 @@ class HerculesConfig:
                     "source",
                     "column",
                     "input_type",
-                    "fixed_during_inference",
+                    "update_during_inference",
                 }
                 unknown_prior_keys = set(prior) - allowed_prior_keys
                 if unknown_prior_keys:
@@ -244,9 +244,9 @@ class HerculesConfig:
                     errors.append(
                         f"{stage_name}.per_snp_prior.input_type must be 'variance' or 'precision'"
                     )
-                if prior.get("fixed_during_inference", True) is not True:
+                if prior.get("update_during_inference", True) is not True:
                     errors.append(
-                        f"{stage_name}.per_snp_prior.fixed_during_inference must be true"
+                        f"{stage_name}.per_snp_prior.update_during_inference must be true"
                     )
 
             if str(model_config.get("grid_metric", "validation")) != "validation":

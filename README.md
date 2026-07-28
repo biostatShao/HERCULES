@@ -154,7 +154,7 @@ the following exact, case-sensitive column names:
 | `BETA` | yes | GWAS effect estimate. |
 | `SE` | yes | Positive standard error of `BETA`. |
 | `P` | yes | Normal association P value in the range 0–1. |
-| `var_prior` | no | Precomputed positive, finite per-SNP effect-size prior variance. |
+| `var_prior` | no | Precomputed positive, finite per-SNP effect-size variance used to initialize `tau_beta`. |
 
 Example:
 
@@ -168,11 +168,16 @@ CHR  SNP       POS      A1  A2  N      AF1   BETA    SE     P       var_prior
 modify the user's file. Immediately before M1 or M2 inference it creates an
 internal temporary table:
 
-- when `var_prior` is present, its values are used as the fixed per-SNP prior
+- when `var_prior` is present, its values initialize the per-SNP prior
   variances;
-- when `var_prior` is absent, every SNP receives prior variance `1`;
-- the model uses prior precision `tau_beta_j = 1 / var_prior_j` and keeps it
-  fixed during initialization and every M-step.
+- when `var_prior` is absent, every SNP receives initial prior variance `1`;
+- the first E-step uses `tau_beta_j = 1 / var_prior_j`;
+- every following M-step updates `tau_beta` through the original EM equation,
+  `tau_beta = pi * m / sum(zeta)`, separately for each grid model.
+
+Consequently, `var_prior` controls initialization but is not held fixed during
+inference. After the first M-step, `tau_beta` is the EM estimate rather than the
+original row-wise input values.
 
 If `var_prior` is present, every row must contain a numeric value greater than
 zero. Missing, zero, negative, infinite, or non-numeric values cause the run to
@@ -293,7 +298,8 @@ reads base-ancestry inputs.
 | `validation_phenotype` | PLINK-format phenotype used for grid-model selection. |
 | `validation_keep` | Optional PLINK-format sample keep file. |
 
-The fixed prior conversion is automatic and does not require a YAML parameter.
+The `var_prior` initialization and subsequent EM updates are automatic and do
+not require a YAML parameter.
 
 ### `m3`, `ensemble`, checkpoints and logging
 
@@ -329,7 +335,7 @@ process handling. R is used only for the final validated ensemble procedure.
 ## Scientific validation status
 
 The implementation is executable end to end on the validated Linux platform.
-The corrected package passed 66 automated tests. Quantitative and binary
+The corrected package passed 67 automated tests. Quantitative and binary
 examples completed end to end, and the quantitative example also completed
 from a clean wheel installation outside the source checkout. A table-by-table
 comparison between the corrected editable installation and corrected wheel
@@ -342,9 +348,9 @@ binary example completed in 19.32 seconds with 216,928 KiB peak resident memory
 and produced AUC = 0.683862433862434. These values validate packaging and
 deterministic execution, not scientific performance on real data.
 
-The final reported mean `tau_beta` matched `mean(1/var_prior)` from the stage-specific
-input to float32 output precision: absolute differences were approximately
-`8.2e-7` for M1 and `1.1e-6` for M2.
+The initial per-SNP `tau_beta` is `1/var_prior`, but the value reported after
+fitting is the final EM-updated estimate and is therefore not expected to equal
+`mean(1/var_prior)`.
 
 One historical M3 comparison passed at `rtol=1e-8, atol=1e-10`. Historical M1
 and M2 replays retained exact schemas and SNP order but did not pass the

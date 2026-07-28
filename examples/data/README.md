@@ -13,8 +13,12 @@ This directory contains a deterministic, public smoke-test fixture:
 - ready-to-run quantitative and binary YAML configurations.
 
 In both FastGWA summary-statistics files, `P` is a normal association P value
-and `var_prior` is a positive synthetic per-SNP prior variance. M1 uses the
+and `var_prior` is a positive synthetic per-SNP initial variance. M1 uses the
 target file and M2 uses the base file independently.
+
+HERCULES converts these values to the initial precision
+`tau_beta_j = 1/var_prior_j`. The EM M-step subsequently updates `tau_beta`;
+the input values are not fixed throughout fitting.
 
 The fixture contains no private or real participant data. Run commands from the
 repository root so that the relative paths in the YAML files resolve correctly.

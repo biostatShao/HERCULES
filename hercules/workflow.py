@@ -370,13 +370,13 @@ def _hyperparameter_search_code(config: dict[str, Any]) -> str:
 
 
 def _per_snp_prior_cli_args(model_config: dict[str, Any]) -> list[str]:
-    """Translate the stage-specific fixed prior configuration for fit_cli."""
+    """Translate the stage-specific tau_beta initialization for fit_cli."""
 
     prior = model_config.get("per_snp_prior", {})
     if not prior.get("enabled", True):
         return []
     return [
-        "--fixed-per-snp-prior-column",
+        "--initial-per-snp-prior-column",
         str(prior.get("column", "PVAL")),
         "--per-snp-prior-input-type",
         str(prior.get("input_type", "variance")),
