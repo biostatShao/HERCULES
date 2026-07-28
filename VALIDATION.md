@@ -15,6 +15,8 @@ historical manuscript outputs unless such a comparison is explicitly listed.
 - Stage 3 contains exactly target Stage-1 and calibrated Stage-2 scores.
 - Stage 3 is trained on explicit target validation data and applied unchanged
   to disjoint target test data.
+- Stage 3 uses the supplied phenotype directly and does not add an implicit
+  covariate-residualization model.
 - Quantitative SuperLearner uses Lasso/ridge/neural network; binary uses
   Lasso/neural network with `method.AUC`.
 
@@ -32,7 +34,7 @@ Executed command:
 pytest -q
 ```
 
-Result: **89 passed**.
+Result: **96 passed**.
 
 ## Linux end-to-end smoke tests
 
@@ -53,7 +55,7 @@ Observed final smoke metrics:
 
 | Fixture | Metric | Value |
 |---|---:|---:|
-| Quantitative | R2 | 0.984217268991223 |
+| Quantitative | R2 | 0.863969576386619 |
 | Binary | AUC | 0.99937343358396 |
 
 ## Installation reproducibility

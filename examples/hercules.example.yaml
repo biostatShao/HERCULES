@@ -27,7 +27,9 @@ inputs:
   # Optional only when final test R2/AUC should be calculated.
   target_test_phenotype: /work/data/phenotype/AFR.stage3.test.tsv
   phenotype_column: phenotype
-  covariates: [age, sex, PC1, PC2]
+  # Stage 3 follows the Methods formula P=[p1,p2] exactly; it does not perform
+  # an additional hidden covariate-residualization model.
+  covariates: []
   trait_type: quantitative
 
 output_dir: /work/results/example_trait

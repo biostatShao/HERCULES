@@ -21,11 +21,11 @@ SL.ridge.HERCULES <- function(Y, X, newX, family, obsWeights, id, ...) {
 }
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 9L) {
+if (length(args) != 8L) {
   stop(
     paste(
       "Usage: ensemble_superlearner.R validation_predictors validation_phenotype",
-      "test_predictors test_phenotype_or_empty phenotype_column covariates",
+      "test_predictors test_phenotype_or_empty phenotype_column",
       "trait_type output_prefix seed"
     ),
     call. = FALSE
@@ -37,10 +37,9 @@ validation_phenotype_path <- args[[2L]]
 test_predictor_path <- args[[3L]]
 test_phenotype_path <- args[[4L]]
 phenotype_column <- args[[5L]]
-covariates <- if (nzchar(args[[6L]])) strsplit(args[[6L]], ",", fixed = TRUE)[[1L]] else character()
-trait_type <- args[[7L]]
-output_prefix <- args[[8L]]
-seed <- as.integer(args[[9L]])
+trait_type <- args[[6L]]
+output_prefix <- args[[7L]]
+seed <- as.integer(args[[8L]])
 set.seed(seed)
 
 score_columns <- c("target_stage1_score", "calibrated_stage2_score")
@@ -73,7 +72,7 @@ if (length(overlap)) {
 }
 
 validation_phenotype <- fread(validation_phenotype_path)
-required_validation <- c("IID", phenotype_column, covariates)
+required_validation <- c("IID", phenotype_column)
 missing_validation <- setdiff(required_validation, names(validation_phenotype))
 if (length(missing_validation)) {
   stop(
@@ -93,8 +92,8 @@ validation <- as.data.frame(cbind(
   validation_scores,
   as.data.frame(validation_phenotype[validation_rows, ..required_validation][, IID := NULL])
 ))
-if (!all(complete.cases(validation[, c(phenotype_column, covariates), drop = FALSE]))) {
-  stop("Validation phenotype or covariates contain missing values", call. = FALSE)
+if (!all(complete.cases(validation[, phenotype_column, drop = FALSE]))) {
+  stop("Validation phenotype contains missing values", call. = FALSE)
 }
 if (nrow(validation) < 10L) {
   stop("At least ten complete target validation samples are required", call. = FALSE)
@@ -102,14 +101,6 @@ if (nrow(validation) < 10L) {
 
 validation_x <- validation[, score_columns, drop = FALSE]
 validation_y <- validation[[phenotype_column]]
-covariate_model <- NULL
-if (trait_type == "quantitative" && length(covariates)) {
-  formula <- as.formula(
-    sprintf("%s ~ %s", phenotype_column, paste(covariates, collapse = " + "))
-  )
-  covariate_model <- lm(formula, data = validation)
-  validation_y <- residuals(covariate_model)
-}
 
 if (trait_type == "quantitative") {
   learner_library <- c("SL.lasso.HERCULES", "SL.ridge.HERCULES", "SL.nnet")
@@ -153,8 +144,6 @@ model_bundle <- list(
   meta_method = meta_method,
   trait_type = trait_type,
   phenotype_column = phenotype_column,
-  covariates = covariates,
-  covariate_model = covariate_model,
   seed = seed,
   score_columns = score_columns
 )
@@ -177,7 +166,7 @@ fwrite(metadata, paste0(output_prefix, ".model-metadata.tsv"), sep = "\t")
 
 if (nzchar(test_phenotype_path)) {
   test_phenotype <- fread(test_phenotype_path)
-  required_test <- c("IID", phenotype_column, covariates)
+  required_test <- c("IID", phenotype_column)
   missing_test <- setdiff(required_test, names(test_phenotype))
   if (length(missing_test)) {
     stop(
@@ -198,8 +187,14 @@ if (nzchar(test_phenotype_path)) {
     as.data.frame(test_phenotype[test_rows, ..required_test][, IID := NULL])
   )
   observed <- evaluated[[phenotype_column]]
-  if (trait_type == "quantitative" && !is.null(covariate_model)) {
-    observed <- observed - as.numeric(predict(covariate_model, newdata = evaluated))
+  if (anyNA(observed) || any(!is.finite(observed))) {
+    stop("Test phenotype contains missing or non-finite values", call. = FALSE)
+  }
+  if (trait_type == "binary") {
+    unique_observed <- sort(unique(observed))
+    if (!all(unique_observed %in% c(0, 1)) || length(unique_observed) != 2L) {
+      stop("Binary test phenotype must contain both 0 and 1", call. = FALSE)
+    }
   }
   predictions$observed <- observed
 

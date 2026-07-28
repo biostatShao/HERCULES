@@ -14,6 +14,8 @@ from hercules.m3 import (
     M3Result,
     calibrate_directional,
     integrate_posterior_tables,
+    mean_field_eta_parameters,
+    stage2_marginal_log_likelihood,
 )
 
 
@@ -119,6 +121,87 @@ def test_single_snp_matches_independent_quadrature_reference() -> None:
     np.testing.assert_allclose(result.beta[0], expected[0], rtol=2e-5, atol=2e-7)
     np.testing.assert_allclose(result.variance[0], expected[1], rtol=2e-5, atol=2e-7)
     np.testing.assert_allclose(result.lambda_mean[0], expected[2], rtol=2e-5, atol=2e-7)
+
+
+def test_integrated_stage2_likelihood_matches_methods_formula() -> None:
+    target_beta = np.array([0.08, -0.03])
+    target_variance = np.array([0.03, 0.04])
+    base_beta = np.array([0.12, 0.05])
+    base_variance = np.array([0.05, 0.06])
+    lambda_value = np.array([0.25, 0.8])
+
+    marginal_variance = target_variance + lambda_value**2 * base_variance
+    expected = -0.5 * (
+        np.log(2.0 * np.pi * marginal_variance)
+        + (target_beta - lambda_value * base_beta) ** 2 / marginal_variance
+    )
+
+    np.testing.assert_allclose(
+        stage2_marginal_log_likelihood(
+            target_beta,
+            target_variance,
+            base_beta,
+            base_variance,
+            lambda_value,
+        ),
+        expected,
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_eta_coordinate_update_matches_mean_field_formula() -> None:
+    target_beta = np.array([0.08, -0.03])
+    target_variance = np.array([0.03, 0.04])
+    base_beta = np.array([0.12, 0.05])
+    base_variance = np.array([0.05, 0.06])
+    expected_inverse_lambda = np.array([2.0, 1.5])
+    expected_inverse_lambda_squared = np.array([5.0, 2.5])
+
+    expected_variance = 1.0 / (
+        1.0 / target_variance
+        + expected_inverse_lambda_squared / base_variance
+    )
+    expected_mean = expected_variance * (
+        target_beta / target_variance
+        + base_beta * expected_inverse_lambda / base_variance
+    )
+
+    mean, variance = mean_field_eta_parameters(
+        target_beta,
+        target_variance,
+        base_beta,
+        base_variance,
+        expected_inverse_lambda,
+        expected_inverse_lambda_squared,
+    )
+    np.testing.assert_allclose(mean, expected_mean, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(variance, expected_variance, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("target_variance", "base_variance", "lambda_value", "message"),
+    [
+        (0.0, 0.05, 0.5, "posterior variances"),
+        (0.03, np.inf, 0.5, "posterior variances"),
+        (0.03, 0.05, -0.1, "lambda values"),
+        (0.03, 0.05, 1.1, "lambda values"),
+    ],
+)
+def test_integrated_stage2_likelihood_rejects_invalid_inputs(
+    target_variance: float,
+    base_variance: float,
+    lambda_value: float,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        stage2_marginal_log_likelihood(
+            np.array([0.08]),
+            np.array([target_variance]),
+            np.array([0.12]),
+            np.array([base_variance]),
+            np.array([lambda_value]),
+        )
 
 
 def test_multi_snp_result_is_finite_deterministic_and_converged() -> None:

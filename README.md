@@ -208,8 +208,13 @@ validation and test sample sets must not overlap.
 `inputs.target_test_phenotype` are tab-delimited tables with:
 
 - `IID`;
-- the column named by `inputs.phenotype_column`;
-- every covariate listed in `inputs.covariates`.
+- the column named by `inputs.phenotype_column`.
+
+Stage 3 uses the supplied phenotype directly and exactly two genetic
+predictors. It does not perform an implicit covariate-residualization step;
+`inputs.covariates` must therefore be empty. Any covariate adjustment required
+by an analysis must be completed explicitly when preparing the phenotype,
+consistently with the analysis protocol.
 
 The validation table trains Stage 3. The test table is never passed to model
 fitting and is needed only to calculate the final metric.
@@ -244,7 +249,7 @@ Important fields are:
 | `inputs.target_test_genotype` | Independent target test PLINK prefix |
 | `inputs.target_test_phenotype` | Optional final-evaluation phenotype table |
 | `inputs.phenotype_column` | Outcome column |
-| `inputs.covariates` | Covariate columns |
+| `inputs.covariates` | Must be empty; Stage 3 has no implicit covariate model |
 | `inputs.trait_type` | `quantitative` or `binary` |
 | `m1.validation_*` | Target Stage-1 model-selection files |
 | `m2.validation_*` | Base Stage-1 model-selection files |

@@ -23,7 +23,7 @@ inputs:
   target_test_genotype: examples/data/genotypes/target_test/target_test
   target_test_phenotype: examples/data/target.stage3.test.tsv
   phenotype_column: phenotype
-  covariates: [age, sex]
+  covariates: []
   trait_type: quantitative
 
 output_dir: examples/output/quantitative

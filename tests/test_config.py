@@ -221,3 +221,10 @@ def test_non_fastgwa_scientific_input_is_rejected(config_path: Path) -> None:
     config.m1["sumstats_format"] = "custom"
     with pytest.raises(ConfigurationError, match="m1.sumstats_format must be 'fastgwa'"):
         config.validate(check_paths=False)
+
+
+def test_stage3_rejects_implicit_covariate_residualization(config_path: Path) -> None:
+    config = load_config(config_path)
+    config.inputs.covariates = ("age", "sex")
+    with pytest.raises(ConfigurationError, match="inputs.covariates must be empty"):
+        config.validate(check_paths=False)

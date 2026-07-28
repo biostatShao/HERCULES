@@ -130,6 +130,12 @@ class HerculesConfig:
             errors.append("inputs.trait_type must be 'quantitative' or 'binary'")
         if not self.inputs.phenotype_column.strip():
             errors.append("inputs.phenotype_column is required")
+        if self.inputs.covariates:
+            errors.append(
+                "inputs.covariates must be empty: the formula-defined Stage 3 uses "
+                "exactly the two genetic predictors and the supplied phenotype without "
+                "implicit covariate residualization"
+            )
 
         required_files = (
             (

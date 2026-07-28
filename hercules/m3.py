@@ -40,6 +40,80 @@ class M3Result:
     elbo: np.ndarray
 
 
+def stage2_marginal_log_likelihood(
+    target_beta: np.ndarray,
+    target_variance: np.ndarray,
+    base_beta: np.ndarray,
+    base_variance: np.ndarray,
+    lambda_value: np.ndarray,
+) -> np.ndarray:
+    """Evaluate the Methods marginal Stage-2 likelihood for fixed lambda.
+
+    Integrating out ``eta`` gives
+    ``b_target | lambda ~ Normal(lambda*b_base,
+    V_target + lambda**2*V_base)``.
+    """
+
+    try:
+        (
+            target_beta,
+            target_variance,
+            base_beta,
+            base_variance,
+            lambda_value,
+        ) = np.broadcast_arrays(
+            np.asarray(target_beta, dtype=np.float64),
+            np.asarray(target_variance, dtype=np.float64),
+            np.asarray(base_beta, dtype=np.float64),
+            np.asarray(base_variance, dtype=np.float64),
+            np.asarray(lambda_value, dtype=np.float64),
+        )
+    except ValueError as exc:
+        raise ValueError("Stage-2 marginal-likelihood inputs are not broadcast-compatible") from exc
+    if not np.isfinite(target_beta).all() or not np.isfinite(base_beta).all():
+        raise ValueError("Stage-2 posterior means must be finite")
+    if (
+        not np.isfinite(target_variance).all()
+        or not np.isfinite(base_variance).all()
+        or np.any(target_variance <= 0.0)
+        or np.any(base_variance <= 0.0)
+    ):
+        raise ValueError("Stage-2 posterior variances must be finite and greater than zero")
+    if (
+        not np.isfinite(lambda_value).all()
+        or np.any(lambda_value < 0.0)
+        or np.any(lambda_value > 1.0)
+    ):
+        raise ValueError("Stage-2 lambda values must be finite and within [0, 1]")
+    marginal_variance = target_variance + np.square(lambda_value) * base_variance
+    return -0.5 * (
+        np.log(2.0 * np.pi * marginal_variance)
+        + np.square(target_beta - lambda_value * base_beta) / marginal_variance
+    )
+
+
+def mean_field_eta_parameters(
+    target_beta: np.ndarray,
+    target_variance: np.ndarray,
+    base_beta: np.ndarray,
+    base_variance: np.ndarray,
+    expected_inverse_lambda: np.ndarray,
+    expected_inverse_lambda_squared: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the Gaussian ``q(eta)`` coordinate update from the Methods model."""
+
+    precision = (
+        1.0 / target_variance
+        + expected_inverse_lambda_squared / base_variance
+    )
+    variance = 1.0 / precision
+    mean = variance * (
+        target_beta / target_variance
+        + base_beta * expected_inverse_lambda / base_variance
+    )
+    return mean, variance
+
+
 def calibrate_directional(
     target_beta: np.ndarray,
     target_variance: np.ndarray,
@@ -130,14 +204,13 @@ def calibrate_directional(
         expected_inverse_squared = mass @ inverse_lambda_squared
         candidate_lambda_mean = mass @ lambda_nodes
 
-        candidate_precision = (
-            1.0 / target_variance
-            + expected_inverse_squared / base_variance
-        )
-        candidate_variance = 1.0 / candidate_precision
-        candidate_mean = candidate_variance * (
-            target_beta / target_variance
-            + base_beta * expected_inverse / base_variance
+        candidate_mean, candidate_variance = mean_field_eta_parameters(
+            target_beta,
+            target_variance,
+            base_beta,
+            base_variance,
+            expected_inverse,
+            expected_inverse_squared,
         )
 
         candidate_second_moment = candidate_variance + np.square(candidate_mean)

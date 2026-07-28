@@ -318,7 +318,7 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
             ),
             "target_test_phenotype": str(root / "target.stage3.test.tsv"),
             "phenotype_column": "phenotype",
-            "covariates": ["age", "sex"],
+            "covariates": [],
             "trait_type": "quantitative",
         },
         "output_dir": str(root / "results" / "quantitative"),

@@ -32,6 +32,8 @@
 - Made M3 non-convergence a stage failure while retaining its diagnostic table.
 - Rejected chromosome, predictor, or phenotype IID-set mismatches instead of
   silently reducing validation/test cohorts through inner joins.
+- Removed the reconstructed quantitative-trait covariate residualization so
+  Stage 3 follows the stated two-predictor formula exactly.
 
 ### Added
 

@@ -24,7 +24,7 @@ from .stages import STAGES, StageSpec, execution_order
 from .sumstats import prepare_fastgwa_sumstats
 
 
-STAGE3_SCIENTIFIC_MODEL = "two-score-validation-trained-superlearner-v1"
+STAGE3_SCIENTIFIC_MODEL = "two-score-validation-trained-superlearner-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,7 +321,6 @@ def _run_ensemble(config: HerculesConfig) -> None:
             test_path,
             config.inputs.target_test_phenotype,
             config.inputs.phenotype_column,
-            ",".join(config.inputs.covariates),
             config.inputs.trait_type,
             output_prefix,
             str(config.execution.seed),

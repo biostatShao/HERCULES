@@ -152,6 +152,10 @@ def test_superlearner_libraries_and_test_outcome_boundary() -> None:
     assert "test_rows <- match(predictions$IID, test_phenotype$IID)" in script
     assert "validation_rows <- match(validation_scores$IID, validation_phenotype$IID)" in script
     assert "na.omit" not in script
+    assert "covariate_model" not in script
+    assert "residuals(" not in script
+    assert "Test phenotype contains missing or non-finite values" in script
+    assert "Binary test phenotype must contain both 0 and 1" in script
     assert script.index("model <- SuperLearner(") < script.index(
         "test_phenotype <- fread(test_phenotype_path)"
     )
