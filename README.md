@@ -154,8 +154,7 @@ the following exact, case-sensitive column names:
 | `BETA` | yes | GWAS effect estimate. |
 | `SE` | yes | Positive standard error of `BETA`. |
 | `P` | yes | Normal association P value in the range 0–1. |
-| `var_prior` | no | Precomputed positive, finite per-SNP effect-size variance used to initialize `tau_beta`. |
-| `var_prior` | optional | Precomputed positive, finite per-SNP effect-size prior variance. |
+| `var_prior` | optional | Precomputed positive, finite per-SNP effect-size variance used to initialize `tau_beta`. |
 
 Example:
 
