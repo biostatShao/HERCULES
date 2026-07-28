@@ -31,6 +31,12 @@ def config_mapping(tmp_path: Path) -> dict[str, Any]:
         validation_keep,
     ):
         path.write_text("fixture\n", encoding="utf-8")
+    fastgwa_fixture = (
+        "CHR\tSNP\tPOS\tA1\tA2\tN\tAF1\tBETA\tSE\tP\n"
+        "1\trs1\t1000\tA\tG\t1000\t0.25\t0.01\t0.02\t0.617075\n"
+    )
+    base.write_text(fastgwa_fixture, encoding="utf-8")
+    target.write_text(fastgwa_fixture, encoding="utf-8")
     for suffix in (".bed", ".bim", ".fam"):
         Path(f"{bed_prefix}{suffix}").write_bytes(b"")
     ld_base.mkdir()

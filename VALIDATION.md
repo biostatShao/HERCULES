@@ -22,7 +22,7 @@ WSL2, a Linux server, or a Linux container.
 - `hercules --version`, `hercules --help`, configuration validation, dependency
   diagnostics, individual stage commands, the ensemble command, and the full
   run command were exercised.
-- All 57 automated tests passed.
+- All 66 automated tests passed.
 - The quantitative and binary examples both completed end to end.
 - The corrected quantitative workflow completed from a clean wheel
   installation outside the source checkout.
@@ -54,10 +54,9 @@ numeric difference was `0.0` for both the quantitative and binary workflows.
 This demonstrates that the packaging and public-name unification did not alter
 the deterministic example outputs.
 
-That comparison predates the correction that makes the FastGWA `P` column a
-fixed per-SNP prior variance throughout M1/M2 inference. It must not be cited as
-an old-versus-new numerical equivalence result for the corrected prior-enabled
-implementation.
+That comparison predates the fixed per-SNP prior correction. It must not be
+cited as an old-versus-new numerical equivalence result for the corrected
+prior-enabled implementation.
 
 ## Corrected source-versus-wheel comparison
 
@@ -77,18 +76,34 @@ maximum absolute numeric difference was `0.0`.
 
 ## Fixed per-SNP prior correction
 
-The corrected workflow treats each stage's own FastGWA `P` column as a
-precomputed per-SNP variance, converts it to prior precision using
-`tau_beta = 1 / PVAL`, and prevents initialization or M-step updates from
-replacing it. Input validation rejects non-numeric, non-finite, zero, and
-negative values.
+The public FastGWA `P` column now retains its normal association P-value
+meaning. Before inference, HERCULES copies `var_prior` into the internal prior
+field; when `var_prior` is absent, it uses variance `1` for every SNP. The model
+converts this variance to prior precision and prevents initialization or M-step
+updates from replacing it. Input validation rejects non-numeric, non-finite,
+zero, and negative `var_prior` values.
 
-For the corrected quantitative and binary runs, the final mean `tau_beta`
-reported by M1 and M2 was compared with `mean(1/P)` computed directly from each
+For the corrected quantitative run, the final mean `tau_beta` reported by M1
+and M2 was compared with `mean(1/var_prior)` computed directly from each
 stage's own FastGWA input. The absolute differences were `8.20e-7` for M1 and
-`1.07e-6` for M2, consistent with float32 model/output precision. This confirms
-that the configured prior reached the completed inference run and was not
-replaced by the initialization or M-step update.
+`1.07e-6` for M2, consistent with float32 model/output precision. The complete
+M1, M2, M3, scoring, and ensemble outputs also matched the preceding
+prior-enabled reference run exactly, with maximum absolute difference `0.0`.
+This confirms that the configured prior reached the completed inference run
+and was not replaced by the initialization or M-step update for this fixture.
+
+A second complete quantitative run used copies of both FastGWA inputs with the
+`var_prior` column removed. Both internal M1/M2 tables contained only `1.0` in
+their prior field, both completed inference files reported `tau_beta = 1.0`,
+and M1, M2, M3, scoring, and the ensemble all completed. Its synthetic-data R2
+was `0.0355527675172468`.
+
+The 1.0.1 sdist and Linux CPython 3.11 wheel were then rebuilt. The wheel
+contained `hercules/sumstats.py`, the scientific Python modules, and all three
+native extensions. A clean environment outside the checkout installed that
+wheel and completed the prior-enabled quantitative workflow. Its compared
+tables matched the editable installation exactly, with maximum absolute
+difference `0.0`.
 
 The recovered M3 implementation has no ancestry-bridging lambda variable and
 no Beta/Uniform lambda update. No placeholder or newly invented lambda

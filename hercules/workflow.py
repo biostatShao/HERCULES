@@ -21,6 +21,7 @@ from .process import run_process
 from .resources import ensemble_script_path
 from .scoring import aggregate_score_files, run_plink2_score
 from .stages import STAGES, StageSpec, execution_order
+from .sumstats import prepare_fastgwa_sumstats
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +144,25 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
             and grid_score.is_file()
         )
         if not (config.checkpoint.enabled and config.checkpoint.resume and complete):
+            sumstats_format = str(model_config.get("sumstats_format", "fastgwa")).lower()
+            source_sumstats = _format_path(
+                sumstats, chromosome=chromosome, ancestry=ancestry
+            )
+            if sumstats_format == "fastgwa":
+                prepared_sumstats = prepare_fastgwa_sumstats(
+                    source_sumstats,
+                    Path(config.temporary_dir)
+                    / f"{stage.output_prefix}.{chromosome}.internal.fastGWA.tsv",
+                )
+                inference_sumstats = prepared_sumstats.path
+            else:
+                inference_sumstats = Path(source_sumstats)
             command: list[str | Path] = [
                 *_fit_command_prefix(),
                 "-l",
                 _format_path(ld_reference, chromosome=chromosome, ancestry=ancestry),
                 "-s",
-                _format_path(sumstats, chromosome=chromosome, ancestry=ancestry),
+                inference_sumstats,
                 "--output-dir",
                 config.temporary_dir,
                 "--output-file-prefix",
@@ -160,7 +174,7 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
                 "--sigma-epsilon-steps",
                 str(model_config.get("sigma_epsilon_steps", 10)),
                 "--sumstats-format",
-                str(model_config.get("sumstats_format", "fastgwa")),
+                sumstats_format,
                 "--backend",
                 str(model_config.get("backend", "plink")),
                 "--validation-bfile",

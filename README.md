@@ -134,42 +134,181 @@ hercules ensemble --config hercules.yaml
 Requesting M3 or the ensemble automatically runs missing prerequisite stages.
 Checkpoints include the trait, chromosome, stage, and configuration hash.
 
-## Fixed per-SNP variance prior for M1 and M2
+## Input files
 
-Both M1 and M2 use a fixed, stage-specific prior variance for every SNP. For
-FastGWA input, the file's `P` column is deliberately repurposed: it must contain
-the precomputed per-SNP variance (for example, the `baseline` value from an
-LDSC-derived `.snpvg` file), not a statistical P-value. `magenpy` exposes this
-input column internally as `PVAL`, and HERCULES computes
+### GWAS summary statistics
+
+M1 reads the target-ancestry summary-statistics file and M2 reads the
+base-ancestry file. Both files must be tab-delimited FastGWA-style tables with
+the following exact, case-sensitive column names:
+
+| Column | Required | Meaning and validation |
+|---|---:|---|
+| `CHR` | yes | Chromosome identifier. |
+| `SNP` | yes | Variant identifier, normally an rsID. |
+| `POS` | yes | Positive base-pair position. |
+| `A1` | yes | Effect allele corresponding to `BETA`. |
+| `A2` | yes | Other allele. |
+| `N` | yes | Positive per-SNP GWAS sample size. |
+| `AF1` | yes | Effect-allele frequency in the range 0–1. |
+| `BETA` | yes | GWAS effect estimate. |
+| `SE` | yes | Positive standard error of `BETA`. |
+| `P` | yes | Normal association P value in the range 0–1. |
+| `var_prior` | no | Precomputed positive, finite per-SNP effect-size prior variance. |
+
+Example:
 
 ```text
-tau_beta_j = 1 / PVAL_j
+CHR  SNP       POS      A1  A2  N      AF1   BETA    SE     P       var_prior
+22   rs10001   1000000  G   A   50000  0.15  0.006   0.020  0.7642  0.0200
+22   rs10002   1010000  T   C   50000  0.17 -0.007   0.021  0.7389  0.0205
 ```
 
-because `tau_beta` is the prior precision. The precision is fixed through
-initialization and every M-step. M1 reads the target-ancestry FastGWA file; M2
-independently reads the base-ancestry FastGWA file. Values must be finite and
-strictly greater than zero.
+`P` is always a statistical P value in the public input. HERCULES does not
+modify the user's file. Immediately before M1 or M2 inference it creates an
+internal temporary table:
 
-```yaml
-m1:
-  per_snp_prior:
-    enabled: true
-    source: summary_statistics
-    column: PVAL
-    input_type: variance
-    fixed_during_inference: true
-m2:
-  per_snp_prior:
-    enabled: true
-    source: summary_statistics
-    column: PVAL
-    input_type: variance
-    fixed_during_inference: true
+- when `var_prior` is present, its values are used as the fixed per-SNP prior
+  variances;
+- when `var_prior` is absent, every SNP receives prior variance `1`;
+- the model uses prior precision `tau_beta_j = 1 / var_prior_j` and keeps it
+  fixed during initialization and every M-step.
+
+If `var_prior` is present, every row must contain a numeric value greater than
+zero. Missing, zero, negative, infinite, or non-numeric values cause the run to
+stop before model fitting. Additional input columns are permitted but are not
+passed to the inference parser.
+
+### LD reference
+
+`inputs.ld_reference.base` and `inputs.ld_reference.target` must point to
+compatible magenpy LD stores. A path may contain `{chrom}` or `{chromosome}`;
+the placeholder is replaced separately for every configured chromosome. SNP
+identifiers, positions and alleles must be compatible with the corresponding
+summary-statistics file.
+
+### Genotype files
+
+Genotypes must use a complete PLINK prefix:
+
+- BED format: `.bed`, `.bim` and `.fam`; or
+- PGEN format: `.pgen`, `.pvar` and `.psam`.
+
+`inputs.genotype_prefixes.target` is used for final PRS scoring.
+`inputs.validation_genotype` is the default M1 validation genotype.
+`inputs.genotype_prefixes.base_validation` is the default M2 validation
+genotype and may be overridden by `m2.validation_genotype`.
+
+### Phenotype, covariates and validation files
+
+`inputs.phenotype_file` is a tab-delimited table used by the final ensemble. It
+must contain `IID`, the column named by `inputs.phenotype_column`, and every
+column listed under `inputs.covariates`.
+
+The M1/M2 `validation_phenotype` files use the standard PLINK three-column,
+header-free layout:
+
+```text
+FID  IID  phenotype
 ```
 
-Do not place ordinary association P-values in this column when running
-HERCULES.
+An optional `validation_keep` file contains `FID` and `IID`, without a header.
+For binary traits, phenotype values must follow the coding expected by the
+configured PLINK validation data and the final R ensemble.
+
+### Functional input files
+
+`inputs.functional_annotation` and `inputs.per_snp_heritability` record and
+validate the source functional files used to produce `var_prior`. The current
+runtime does not estimate `var_prior` from raw annotations; that preprocessing
+must be completed before running HERCULES.
+
+## YAML configuration reference
+
+Start from `examples/hercules.example.yaml`. Paths may be absolute or relative
+to the directory from which the command is run.
+
+### Analysis identity
+
+| Parameter | Description |
+|---|---|
+| `trait_name` | Trait identifier used in manifests and checkpoints. It must be safe for use in filenames. |
+| `chromosomes` | List of chromosomes to process, for example `[1, 2, 22]`. |
+| `base_ancestry` | Label for the base ancestry used by M2. |
+| `target_ancestry` | Label for the target ancestry used by M1 and final scoring. |
+
+### `inputs`
+
+| Parameter | Description |
+|---|---|
+| `summary_statistics.base_path` | Base-ancestry FastGWA file or chromosome path template. |
+| `summary_statistics.target_path` | Target-ancestry FastGWA file or chromosome path template. |
+| `summary_statistics.base_columns` | Keep `{}` for the strict FastGWA interface. |
+| `summary_statistics.target_columns` | Keep `{}` for the strict FastGWA interface. |
+| `functional_annotation` | Optional raw annotation file retained as input metadata. Use `""` if unavailable. |
+| `per_snp_heritability` | Optional file from which `var_prior` was prepared. Use `""` if unavailable. |
+| `ld_reference.base` | Base-ancestry magenpy LD path or template. |
+| `ld_reference.target` | Target-ancestry magenpy LD path or template. |
+| `genotype_prefixes.base_validation` | Base-ancestry PLINK validation prefix used by M2. |
+| `genotype_prefixes.target` | Target-ancestry PLINK prefix used for M1/M2/M3 scoring. |
+| `validation_genotype` | Default target validation PLINK prefix used by M1. |
+| `phenotype_file` | Final ensemble phenotype/covariate table. |
+| `phenotype_column` | Outcome column in `phenotype_file`. |
+| `covariates` | Covariate column names; use `[]` when no covariates are required. |
+| `trait_type` | `quantitative` or `binary`. |
+
+### Output and executables
+
+| Parameter | Description |
+|---|---|
+| `output_dir` | Final scores, ensemble results, manifests and checkpoints. |
+| `temporary_dir` | Per-chromosome posteriors, internal summary statistics and subprocess files. |
+| `tools.plink` | PLINK 1.9 executable name or absolute path. |
+| `tools.plink2` | PLINK2 executable name or absolute path. |
+| `tools.rscript` | Rscript executable name or absolute path. |
+
+### `execution`
+
+| Parameter | Description |
+|---|---|
+| `threads` | Native inference threads. Use `1` for the validated deterministic mode. |
+| `parallel_jobs` | Number of chromosome/model worker processes. Use `1` for deterministic validation. |
+| `seed` | Python and ensemble random seed; the default validated seed is `7209`. |
+
+### `m1` and `m2`
+
+Both stages use the same keys, but M1 reads target-ancestry inputs while M2
+reads base-ancestry inputs.
+
+| Parameter | Description |
+|---|---|
+| `hyperparameter_search` | Use `grid` for the validated workflow. |
+| `grid_metric` | Model-selection criterion: normally `validation`; `ELBO` and `pseudo_validation` are supported by the internal runner where their required inputs are available. |
+| `pi_steps` | Number of causal-proportion grid values; validated default `10`. |
+| `sigma_epsilon_steps` | Number of residual-variance grid values; validated default `10`. |
+| `max_iter` | Maximum variational inference iterations; validated default `500`. |
+| `sumstats_format` | Must be `fastgwa`. |
+| `backend` | Optional magenpy genotype backend; validated value `plink`. |
+| `validation_genotype` | Optional stage-specific validation PLINK prefix. M1/M2 have ancestry-specific defaults described above. |
+| `validation_phenotype` | PLINK-format phenotype used for grid-model selection. |
+| `validation_keep` | Optional PLINK-format sample keep file. |
+
+The fixed prior conversion is automatic and does not require a YAML parameter.
+
+### `m3`, `ensemble`, checkpoints and logging
+
+| Parameter | Description |
+|---|---|
+| `m3.max_iter` | Maximum M3 integration iterations; validated default `1000`. |
+| `m3.tol` | M3 convergence tolerance; validated default `1e-6`. |
+| `ensemble.quantitative_learners` | Documents the validated quantitative SuperLearner candidates, `SL.glmnet` and `SL.ridge`. |
+| `ensemble.binary_selection` | Documents the validated binary rule, `best_individual_auc`. |
+| `checkpoint.enabled` | Write stage completion markers. |
+| `checkpoint.resume` | Reuse outputs only when the checkpoint and configuration hash match. |
+| `logging.level` | Logging level such as `INFO` or `DEBUG`. |
+| `logging.file` | Optional log path; use `""` for console/default logging. |
+
+Supported path placeholders are `{chrom}`, `{chromosome}` and `{ancestry}`.
 
 Configuration precedence is:
 
@@ -187,11 +326,10 @@ HERCULES("hercules.yaml")
 Python owns configuration, orchestration, manifests, checkpoints, and external
 process handling. R is used only for the final validated ensemble procedure.
 
-<<<<<<< HEAD
 ## Scientific validation status
 
 The implementation is executable end to end on the validated Linux platform.
-The corrected package passed 57 automated tests. Quantitative and binary
+The corrected package passed 66 automated tests. Quantitative and binary
 examples completed end to end, and the quantitative example also completed
 from a clean wheel installation outside the source checkout. A table-by-table
 comparison between the corrected editable installation and corrected wheel
@@ -204,7 +342,7 @@ binary example completed in 19.32 seconds with 216,928 KiB peak resident memory
 and produced AUC = 0.683862433862434. These values validate packaging and
 deterministic execution, not scientific performance on real data.
 
-The final reported mean `tau_beta` matched `mean(1/P)` from the stage-specific
+The final reported mean `tau_beta` matched `mean(1/var_prior)` from the stage-specific
 input to float32 output precision: absolute differences were approximately
 `8.2e-7` for M1 and `1.1e-6` for M2.
 
@@ -212,7 +350,8 @@ One historical M3 comparison passed at `rtol=1e-8, atol=1e-10`. Historical M1
 and M2 replays retained exact schemas and SNP order but did not pass the
 predefined float32 tolerance. Raw annotation-to-per-SNP preprocessing remains
 an upstream input-preparation responsibility. The example FastGWA files use
-positive synthetic per-SNP variances in their `P` columns.
+normal association P values in `P` and positive synthetic variances in
+`var_prior`.
 
 The recovered M3 source currently contains no ancestry-bridging `lambda`
 parameter and no Beta or Uniform prior for such a parameter. Therefore no
@@ -228,8 +367,6 @@ Therefore:
 
 See [VALIDATION.md](VALIDATION.md) for the executed checks and their limits.
 
-=======
->>>>>>> 0c8fb05b25fef0805633b7d534feac5ff590a5ce
 ## License and attribution
 
 HERCULES is distributed under the MIT License. Required upstream copyright and

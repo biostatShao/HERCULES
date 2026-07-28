@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import math
 import os
 import shutil
 import subprocess
@@ -163,6 +164,7 @@ def _write_sumstats(root: Path, ancestry: str, offset: int) -> None:
             0.006 + 0.001 * (variant % 8) + 0.0005 * offset
         )
         se = 0.02 + 0.001 * (variant % 4)
+        p_value = math.erfc(abs(beta / se) / math.sqrt(2.0))
         prior_variance = 0.02 + 0.0005238095238095238 * variant + 0.001 * offset
         rows.append(
             (
@@ -175,12 +177,25 @@ def _write_sumstats(root: Path, ancestry: str, offset: int) -> None:
                 0.15 + 0.02 * (variant % 5),
                 beta,
                 se,
+                p_value,
                 prior_variance,
             )
         )
     pd.DataFrame(
         rows,
-        columns=["CHR", "SNP", "POS", "A1", "A2", "N", "AF1", "BETA", "SE", "P"],
+        columns=[
+            "CHR",
+            "SNP",
+            "POS",
+            "A1",
+            "A2",
+            "N",
+            "AF1",
+            "BETA",
+            "SE",
+            "P",
+            "var_prior",
+        ],
     ).to_csv(root / f"{ancestry}.fastGWA.tsv", sep="\t", index=False)
 
 
@@ -237,13 +252,6 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
             "pi_steps": 10,
             "sigma_epsilon_steps": 10,
             "sumstats_format": "fastgwa",
-            "per_snp_prior": {
-                "enabled": True,
-                "source": "summary_statistics",
-                "column": "PVAL",
-                "input_type": "variance",
-                "fixed_during_inference": True,
-            },
             "validation_keep": str(root / "target.validation.keep"),
             "validation_phenotype": str(root / "target.validation.quantitative.pheno"),
         },
@@ -252,13 +260,6 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
             "pi_steps": 10,
             "sigma_epsilon_steps": 10,
             "sumstats_format": "fastgwa",
-            "per_snp_prior": {
-                "enabled": True,
-                "source": "summary_statistics",
-                "column": "PVAL",
-                "input_type": "variance",
-                "fixed_during_inference": True,
-            },
             "validation_genotype": str(root / "genotypes" / "base" / "base"),
             "validation_keep": str(root / "base.validation.keep"),
             "validation_phenotype": str(root / "base.validation.quantitative.pheno"),

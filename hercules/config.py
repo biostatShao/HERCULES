@@ -13,6 +13,7 @@ from typing import Any
 
 from .exceptions import ConfigurationError
 from .paths import safe_path_component
+from .sumstats import validate_fastgwa_header
 
 
 @dataclass(slots=True)
@@ -133,6 +134,29 @@ class HerculesConfig:
             ):
                 errors.append(f"{label} does not exist: {value}")
 
+        if check_paths:
+            for label, value, ancestry in (
+                (
+                    "inputs.summary_statistics.base_path",
+                    self.inputs.summary_statistics.base_path,
+                    self.base_ancestry,
+                ),
+                (
+                    "inputs.summary_statistics.target_path",
+                    self.inputs.summary_statistics.target_path,
+                    self.target_ancestry,
+                ),
+            ):
+                for resolved in _configured_values(
+                    value, self.chromosomes, ancestry=ancestry
+                ):
+                    if not Path(resolved).is_file():
+                        continue
+                    try:
+                        validate_fastgwa_header(resolved)
+                    except ValueError as exc:
+                        errors.append(f"{label}: {exc}")
+
         for ancestry, path in (
             (self.base_ancestry, self.inputs.ld_reference.get("base", "")),
             (self.target_ancestry, self.inputs.ld_reference.get("target", "")),
@@ -180,6 +204,11 @@ class HerculesConfig:
                 self.base_ancestry,
             ),
         ):
+            if str(model_config.get("sumstats_format", "fastgwa")).lower() != "fastgwa":
+                errors.append(
+                    f"{stage_name}.sumstats_format must be 'fastgwa' for the "
+                    "validated HERCULES workflow"
+                )
             prior = model_config.get("per_snp_prior", {})
             if not isinstance(prior, Mapping):
                 errors.append(f"{stage_name}.per_snp_prior must be a mapping")

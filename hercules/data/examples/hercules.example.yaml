@@ -7,33 +7,11 @@ inputs:
   summary_statistics:
     base_path: /work/data/sumstats/EUR/chr_{chrom}.fastGWA
     target_path: /work/data/sumstats/AFR/chr_{chrom}.fastGWA
-    base_columns:
-      chromosome: CHR
-      snp: SNP
-      position: POS
-      effect_allele: A1
-      other_allele: A2
-      beta: BETA
-      standard_error: SE
-      # FastGWA/magenpy calls this P/PVAL, but HERCULES requires a precomputed
-      # per-SNP prior variance here, not an association P-value.
-      p_value: P
-      sample_size: N
-    target_columns:
-      chromosome: CHR
-      snp: SNP
-      position: POS
-      effect_allele: A1
-      other_allele: A2
-      beta: BETA
-      standard_error: SE
-      # FastGWA/magenpy calls this P/PVAL, but HERCULES requires a precomputed
-      # per-SNP prior variance here, not an association P-value.
-      p_value: P
-      sample_size: N
-  # Raw annotations are recorded and validated here. The currently recovered
-  # runtime expects their derived per-SNP values to be present in the prepared
-  # summary-statistics input; raw annotation-to-weight estimation is upstream.
+    # FastGWA inputs use the exact column names documented in README.md.
+    base_columns: {}
+    target_columns: {}
+  # Raw annotations are recorded and validated here. Their derived per-SNP
+  # variances must be supplied in the optional FastGWA var_prior column.
   functional_annotation: /work/data/annotations/functional_annotation.tsv
   per_snp_heritability: /work/data/annotations/per_snp_heritability.tsv
   ld_reference:
@@ -68,12 +46,6 @@ m1:
   sigma_epsilon_steps: 10
   max_iter: 500
   sumstats_format: fastgwa
-  per_snp_prior:
-    enabled: true
-    source: summary_statistics
-    column: PVAL
-    input_type: variance
-    fixed_during_inference: true
   validation_phenotype: /work/data/phenotype/AFR.validation.pheno
   validation_keep: /work/data/phenotype/AFR.validation.keep
 m2:
@@ -83,12 +55,6 @@ m2:
   sigma_epsilon_steps: 10
   max_iter: 500
   sumstats_format: fastgwa
-  per_snp_prior:
-    enabled: true
-    source: summary_statistics
-    column: PVAL
-    input_type: variance
-    fixed_during_inference: true
   validation_genotype: /work/data/genotypes/EUR_validation_chr{chrom}
   validation_phenotype: /work/data/phenotype/EUR.validation.pheno
   validation_keep: /work/data/phenotype/EUR.validation.keep

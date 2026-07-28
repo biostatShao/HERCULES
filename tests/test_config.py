@@ -159,7 +159,8 @@ def test_ancestry_placeholder_uses_stage_context(
     for ancestry in ("EUR", "AFR"):
         for chromosome in ("1", "2"):
             Path(str(template).format(ancestry=ancestry, chrom=chromosome)).write_text(
-                "fixture\n", encoding="utf-8"
+                "CHR\tSNP\tPOS\tA1\tA2\tN\tAF1\tBETA\tSE\tP\n",
+                encoding="utf-8",
             )
     inputs = dict(config_mapping["inputs"])
     summary = dict(inputs["summary_statistics"])
@@ -213,3 +214,10 @@ def test_model_mapping_keys_must_be_strings(
     path.write_text(yaml.safe_dump(config_mapping), encoding="utf-8")
     with pytest.raises(ConfigurationError, match="m1 mapping keys"):
         load_config(path)
+
+
+def test_non_fastgwa_scientific_input_is_rejected(config_path: Path) -> None:
+    config = load_config(config_path)
+    config.m1["sumstats_format"] = "custom"
+    with pytest.raises(ConfigurationError, match="m1.sumstats_format must be 'fastgwa'"):
+        config.validate(check_paths=False)
