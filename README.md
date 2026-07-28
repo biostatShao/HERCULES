@@ -154,11 +154,8 @@ the following exact, case-sensitive column names:
 | `BETA` | yes | GWAS effect estimate. |
 | `SE` | yes | Positive standard error of `BETA`. |
 | `P` | yes | Normal association P value in the range 0–1. |
-<<<<<<< HEAD
 | `var_prior` | no | Precomputed positive, finite per-SNP effect-size variance used to initialize `tau_beta`. |
-=======
 | `var_prior` | optional | Precomputed positive, finite per-SNP effect-size prior variance. |
->>>>>>> cd4ff3991bab2c8a6891d739aaa8564105dd7f62
 
 Example:
 
@@ -167,11 +164,6 @@ CHR  SNP       POS      A1  A2  N      AF1   BETA    SE     P       var_prior
 22   rs10001   1000000  G   A   50000  0.15  0.006   0.020  0.7642  0.0200
 22   rs10002   1010000  T   C   50000  0.17 -0.007   0.021  0.7389  0.0205
 ```
-
-<<<<<<< HEAD
-`P` is always a statistical P value in the public input. HERCULES does not
-modify the user's file. Immediately before M1 or M2 inference it creates an
-internal temporary table:
 
 - when `var_prior` is present, its values initialize the per-SNP prior
   variances;
@@ -184,8 +176,6 @@ Consequently, `var_prior` controls initialization but is not held fixed during
 inference. After the first M-step, `tau_beta` is the EM estimate rather than the
 original row-wise input values.
 
-=======
->>>>>>> cd4ff3991bab2c8a6891d739aaa8564105dd7f62
 If `var_prior` is present, every row must contain a numeric value greater than
 zero. Missing, zero, negative, infinite, or non-numeric values cause the run to
 stop before model fitting. Additional input columns are permitted but are not
@@ -339,50 +329,6 @@ HERCULES("hercules.yaml")
 Python owns configuration, orchestration, manifests, checkpoints, and external
 process handling. R is used only for the final validated ensemble procedure.
 
-<<<<<<< HEAD
-## Scientific validation status
-
-The implementation is executable end to end on the validated Linux platform.
-The corrected package passed 67 automated tests. Quantitative and binary
-examples completed end to end, and the quantitative example also completed
-from a clean wheel installation outside the source checkout. A table-by-table
-comparison between the corrected editable installation and corrected wheel
-installation covered M1/M2 scores and posteriors, M3, and ensemble outputs;
-every compared numeric value had a maximum absolute difference of `0.0`.
-
-The corrected quantitative example completed in 68.94 seconds with 249,556
-KiB peak resident memory and produced R2 = 0.0577308741972629. The corrected
-binary example completed in 19.32 seconds with 216,928 KiB peak resident memory
-and produced AUC = 0.683862433862434. These values validate packaging and
-deterministic execution, not scientific performance on real data.
-
-The initial per-SNP `tau_beta` is `1/var_prior`, but the value reported after
-fitting is the final EM-updated estimate and is therefore not expected to equal
-`mean(1/var_prior)`.
-
-One historical M3 comparison passed at `rtol=1e-8, atol=1e-10`. Historical M1
-and M2 replays retained exact schemas and SNP order but did not pass the
-predefined float32 tolerance. Raw annotation-to-per-SNP preprocessing remains
-an upstream input-preparation responsibility. The example FastGWA files use
-normal association P values in `P` and positive synthetic variances in
-`var_prior`.
-
-The recovered M3 source currently contains no ancestry-bridging `lambda`
-parameter and no Beta or Uniform prior for such a parameter. Therefore no
-unverified lambda implementation has been added. Aligning a manuscript
-`lambda ~ Uniform(0,1)` description with executable code requires the original
-analysis source (including its lambda updates) or a separately authorized and
-numerically validated scientific implementation.
-
-Therefore:
-
-> The refactor was designed to preserve the identified scientific defaults,
-> but full scientific equivalence has not yet been demonstrated.
-
-See [VALIDATION.md](VALIDATION.md) for the executed checks and their limits.
-
-=======
->>>>>>> cd4ff3991bab2c8a6891d739aaa8564105dd7f62
 ## License and attribution
 
 HERCULES is distributed under the MIT License. Required upstream copyright and
