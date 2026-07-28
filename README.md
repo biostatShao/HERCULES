@@ -154,7 +154,7 @@ the following exact, case-sensitive column names:
 | `BETA` | yes | GWAS effect estimate. |
 | `SE` | yes | Positive standard error of `BETA`. |
 | `P` | yes | Normal association P value in the range 0–1. |
-| `var_prior` | no | Precomputed positive, finite per-SNP effect-size prior variance. |
+| `var_prior` | optional | Precomputed positive, finite per-SNP effect-size prior variance. |
 
 Example:
 
@@ -163,16 +163,6 @@ CHR  SNP       POS      A1  A2  N      AF1   BETA    SE     P       var_prior
 22   rs10001   1000000  G   A   50000  0.15  0.006   0.020  0.7642  0.0200
 22   rs10002   1010000  T   C   50000  0.17 -0.007   0.021  0.7389  0.0205
 ```
-
-`P` is always a statistical P value in the public input. HERCULES does not
-modify the user's file. Immediately before M1 or M2 inference it creates an
-internal temporary table:
-
-- when `var_prior` is present, its values are used as the fixed per-SNP prior
-  variances;
-- when `var_prior` is absent, every SNP receives prior variance `1`;
-- the model uses prior precision `tau_beta_j = 1 / var_prior_j` and keeps it
-  fixed during initialization and every M-step.
 
 If `var_prior` is present, every row must contain a numeric value greater than
 zero. Missing, zero, negative, infinite, or non-numeric values cause the run to
