@@ -36,7 +36,7 @@ class HerculesGridSearch(HerculesGrid):
 
         super().__init__(gdl, grid=grid, **kwargs)
 
-    def select_best_model(self, validation_gdl=None, criterion='ELBO'):
+    def select_best_model(self, validation_gdl=None, criterion='ELBO', validation_metric='r2'):
         """
         From the grid of models that were fit to the data, select the best 
         model according to the specified `criterion`. If the criterion is the ELBO,
@@ -72,13 +72,26 @@ class HerculesGridSearch(HerculesGrid):
                 assert validation_gdl.sample_table is not None
                 assert validation_gdl.sample_table.phenotype is not None
 
-                from hercules.core.eval.continuous_metrics import r2
-
                 prs = self.predict(test_gdl=validation_gdl)
-                prs_r2 = np.array([r2(prs[:, i], validation_gdl.sample_table.phenotype) for i in range(self.n_models)])
-                prs_r2[~models_converged] = -np.inf
-                self.validation_result['Validation_R2'] = prs_r2
-                best_model_idx = np.argmax(prs_r2)
+                if validation_metric == 'auc':
+                    from hercules.core.eval.binary_metrics import roc_auc
+                    values = np.array([
+                        roc_auc(validation_gdl.sample_table.phenotype, prs[:, i])
+                        for i in range(self.n_models)
+                    ])
+                    column = 'Validation_AUC'
+                elif validation_metric == 'r2':
+                    from hercules.core.eval.continuous_metrics import r2
+                    values = np.array([
+                        r2(prs[:, i], validation_gdl.sample_table.phenotype)
+                        for i in range(self.n_models)
+                    ])
+                    column = 'Validation_R2'
+                else:
+                    raise ValueError("validation_metric must be 'r2' or 'auc'")
+                values[~models_converged] = -np.inf
+                self.validation_result[column] = values
+                best_model_idx = np.argmax(values)
             elif criterion == 'pseudo_validation':
 
                 pseudo_corr = self.pseudo_validate(validation_gdl, metric='r2')
@@ -101,6 +114,7 @@ class HerculesGridSearch(HerculesGrid):
 
         # Update sigma epsilon:
         self.sigma_epsilon = self.sigma_epsilon[best_model_idx]
+        self._sigma_g = self._sigma_g[best_model_idx]
 
         # Update sigma beta:
         if isinstance(self.tau_beta, dict):

@@ -2,7 +2,8 @@
 #'
 #' Python owns configuration, paths, stage orchestration, manifests, and
 #' subprocess handling. R remains the boundary for the validated SuperLearner
-#' procedure used by the installed workflow.
+#' procedure. Stage 3 is fitted only on the explicit target validation cohort
+#' and applied unchanged to the disjoint target test cohort configured in YAML.
 #'
 #' @param config Path to hercules.yaml.
 #' @param hercules_executable Executable name or path.

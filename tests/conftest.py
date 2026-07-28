@@ -19,6 +19,10 @@ def config_mapping(tmp_path: Path) -> dict[str, Any]:
     validation_pheno = input_dir / "validation.pheno"
     validation_keep = input_dir / "validation.keep"
     bed_prefix = input_dir / "validation cohort"
+    target_validation_prefix = input_dir / "target validation cohort"
+    target_test_prefix = input_dir / "target test cohort"
+    target_validation_phenotype = input_dir / "target validation.tsv"
+    target_test_phenotype = input_dir / "target test.tsv"
     ld_base = input_dir / "ld base"
     ld_target = input_dir / "ld target"
     for path in (
@@ -29,6 +33,8 @@ def config_mapping(tmp_path: Path) -> dict[str, Any]:
         per_snp,
         validation_pheno,
         validation_keep,
+        target_validation_phenotype,
+        target_test_phenotype,
     ):
         path.write_text("fixture\n", encoding="utf-8")
     fastgwa_fixture = (
@@ -37,8 +43,9 @@ def config_mapping(tmp_path: Path) -> dict[str, Any]:
     )
     base.write_text(fastgwa_fixture, encoding="utf-8")
     target.write_text(fastgwa_fixture, encoding="utf-8")
-    for suffix in (".bed", ".bim", ".fam"):
-        Path(f"{bed_prefix}{suffix}").write_bytes(b"")
+    for prefix in (bed_prefix, target_validation_prefix, target_test_prefix):
+        for suffix in (".bed", ".bim", ".fam"):
+            Path(f"{prefix}{suffix}").write_bytes(b"")
     ld_base.mkdir()
     ld_target.mkdir()
     tool_dir = tmp_path / "tools with spaces"
@@ -70,6 +77,10 @@ def config_mapping(tmp_path: Path) -> dict[str, Any]:
             },
             "validation_genotype": str(bed_prefix),
             "phenotype_file": str(phenotype),
+            "target_validation_genotype": str(target_validation_prefix),
+            "target_validation_phenotype": str(target_validation_phenotype),
+            "target_test_genotype": str(target_test_prefix),
+            "target_test_phenotype": str(target_test_phenotype),
             "phenotype_column": "height",
             "trait_type": "quantitative",
         },

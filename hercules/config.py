@@ -33,6 +33,10 @@ class InputConfig:
     genotype_prefixes: dict[str, str] = field(default_factory=dict)
     validation_genotype: str = ""
     phenotype_file: str = ""
+    target_validation_genotype: str = ""
+    target_validation_phenotype: str = ""
+    target_test_genotype: str = ""
+    target_test_phenotype: str = ""
     phenotype_column: str = ""
     covariates: tuple[str, ...] = ()
     trait_type: str = "quantitative"
@@ -77,8 +81,22 @@ class HerculesConfig:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     m1: dict[str, Any] = field(default_factory=dict)
     m2: dict[str, Any] = field(default_factory=dict)
-    m3: dict[str, Any] = field(default_factory=lambda: {"max_iter": 1000, "tol": 1e-6})
-    ensemble: dict[str, Any] = field(default_factory=dict)
+    m3: dict[str, Any] = field(
+        default_factory=lambda: {
+            "model": "directional_pairwise_uniform_lambda",
+            "lambda_prior": "uniform_0_1",
+            "max_iter": 1000,
+            "tol": 1e-6,
+            "quadrature_points": 32,
+        }
+    )
+    ensemble: dict[str, Any] = field(
+        default_factory=lambda: {
+            "quantitative_learners": ["lasso", "ridge", "neural_network"],
+            "binary_learners": ["lasso", "neural_network"],
+            "binary_method": "method.AUC",
+        }
+    )
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
@@ -124,7 +142,11 @@ class HerculesConfig:
                 self.inputs.summary_statistics.target_path,
                 self.target_ancestry,
             ),
-            ("inputs.phenotype_file", self.inputs.phenotype_file, self.target_ancestry),
+            (
+                "inputs.target_validation_phenotype",
+                self.inputs.target_validation_phenotype,
+                self.target_ancestry,
+            ),
         )
         for label, value, ancestry in required_files:
             if not value:
@@ -181,16 +203,35 @@ class HerculesConfig:
             )
 
         target_genotype = self.inputs.genotype_prefixes.get("target", "")
-        if not target_genotype:
-            errors.append("inputs.genotype_prefixes.target is required for PRS scoring")
-        elif check_paths and not _configured_genotype_exists(
-            target_genotype,
+        if target_genotype:
+            warnings.append(
+                "inputs.genotype_prefixes.target is retained only as legacy metadata; "
+                "Stage 3 uses explicit target validation and test genotypes."
+            )
+
+        for label, genotype in (
+            ("inputs.target_validation_genotype", self.inputs.target_validation_genotype),
+            ("inputs.target_test_genotype", self.inputs.target_test_genotype),
+        ):
+            if not genotype:
+                errors.append(f"{label} is required")
+            elif check_paths and not _configured_genotype_exists(
+                genotype,
+                self.chromosomes,
+                ancestry=self.target_ancestry,
+            ):
+                errors.append(
+                    f"{label} does not resolve to a PLINK .bed/.pgen prefix: {genotype}"
+                )
+
+        if self.inputs.target_test_phenotype and check_paths and not _configured_file_exists(
+            self.inputs.target_test_phenotype,
             self.chromosomes,
             ancestry=self.target_ancestry,
         ):
             errors.append(
-                "inputs.genotype_prefixes.target does not resolve to a PLINK .bed/.pgen "
-                f"prefix: {target_genotype}"
+                "inputs.target_test_phenotype does not exist: "
+                f"{self.inputs.target_test_phenotype}"
             )
 
         for stage_name, model_config, default_genotype, ancestry in (
@@ -204,6 +245,14 @@ class HerculesConfig:
                 self.base_ancestry,
             ),
         ):
+            if str(model_config.get("hyperparameter_search", "grid")).lower() not in {"grid", "gs"}:
+                errors.append(f"{stage_name}.hyperparameter_search must be 'grid'")
+            if int(model_config.get("pi_steps", 10)) != 10:
+                errors.append(f"{stage_name}.pi_steps must be 10 for the published workflow")
+            if int(model_config.get("sigma_epsilon_steps", 10)) != 10:
+                errors.append(
+                    f"{stage_name}.sigma_epsilon_steps must be 10 for the published workflow"
+                )
             if str(model_config.get("sumstats_format", "fastgwa")).lower() != "fastgwa":
                 errors.append(
                     f"{stage_name}.sumstats_format must be 'fastgwa' for the "
@@ -287,6 +336,28 @@ class HerculesConfig:
                     f"{stage_name}.validation_keep does not exist: {validation_keep}"
                 )
 
+        if self.m3.get("model", "") != "directional_pairwise_uniform_lambda":
+            errors.append("m3.model must be 'directional_pairwise_uniform_lambda'")
+        if self.m3.get("lambda_prior", "") != "uniform_0_1":
+            errors.append("m3.lambda_prior must be 'uniform_0_1'")
+        if int(self.m3.get("quadrature_points", 32)) < 8:
+            errors.append("m3.quadrature_points must be at least 8")
+        if list(self.ensemble.get("quantitative_learners", [])) != [
+            "lasso",
+            "ridge",
+            "neural_network",
+        ]:
+            errors.append(
+                "ensemble.quantitative_learners must be lasso, ridge, neural_network"
+            )
+        if list(self.ensemble.get("binary_learners", [])) != [
+            "lasso",
+            "neural_network",
+        ]:
+            errors.append("ensemble.binary_learners must be lasso, neural_network")
+        if self.ensemble.get("binary_method") != "method.AUC":
+            errors.append("ensemble.binary_method must be 'method.AUC'")
+
         if check_paths:
             for label, executable in (
                 ("tools.plink", self.tools.plink),
@@ -312,14 +383,13 @@ class HerculesConfig:
                     f"{self.inputs.functional_annotation}"
                 )
             warnings.append(
-                "The recovered workflow expects functional information to have been projected into the "
-                "per-SNP values used to prepare its summary statistics; raw annotation-to-weight "
-                "estimation remains an upstream preprocessing step."
+                "Raw functional annotations are recorded for provenance only; provide their derived "
+                "positive SNP-specific initialization variances in each FastGWA var_prior column."
             )
         else:
             warnings.append(
-                "No functional annotation is configured; the recovered inference interface did not expose a "
-                "working annotation input."
+                "No raw functional annotation file is configured; Stage 1 still uses var_prior when "
+                "that column is present in the ancestry-specific FastGWA input."
             )
 
         if (
@@ -467,6 +537,10 @@ def _from_mapping(data: Mapping[str, Any]) -> HerculesConfig:
             genotype_prefixes=dict(inputs["genotype_prefixes"]),
             validation_genotype=str(inputs["validation_genotype"]),
             phenotype_file=str(inputs["phenotype_file"]),
+            target_validation_genotype=str(inputs["target_validation_genotype"]),
+            target_validation_phenotype=str(inputs["target_validation_phenotype"]),
+            target_test_genotype=str(inputs["target_test_genotype"]),
+            target_test_phenotype=str(inputs["target_test_phenotype"]),
             phenotype_column=str(inputs["phenotype_column"]),
             covariates=tuple(str(c) for c in _as_sequence(inputs["covariates"])),
             trait_type=str(inputs["trait_type"]).lower(),
@@ -512,6 +586,10 @@ def _validate_schema(data: Mapping[str, Any]) -> None:
         "per_snp_heritability",
         "validation_genotype",
         "phenotype_file",
+        "target_validation_genotype",
+        "target_validation_phenotype",
+        "target_test_genotype",
+        "target_test_phenotype",
         "phenotype_column",
         "trait_type",
     ):

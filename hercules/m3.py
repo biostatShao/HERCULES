@@ -1,219 +1,330 @@
-"""HERCULES M3 integration matching the recovered ``vi_bayes_paper`` routine.
+"""Directional pairwise Stage-2 calibration for HERCULES.
 
-The recovered implementation does not contain an ancestry-bridging ``lambda``
-parameter or a Beta/Uniform prior for such a parameter. No unverified lambda
-update is introduced here.
+For each aligned SNP, the target effect is calibrated from one designated
+base population under
+
+``eta | lambda ~ Normal(lambda * b_base, lambda**2 * V_base)``,
+``b_target | eta ~ Normal(eta, V_target)``, and
+``lambda ~ Uniform(0, 1)``.
+
+The mean-field family is ``q(eta) q(lambda)``. ``q(eta)`` is Gaussian and
+``q(lambda)`` is a bounded density represented by deterministic Gauss-Legendre
+quadrature on (0, 1). Coordinate updates maximize the directly evaluated ELBO.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from numpy.polynomial.legendre import leggauss
+from scipy.special import logsumexp
+
+
+M3_SCIENTIFIC_MODEL = "directional-pairwise-uniform-lambda-v1"
+LAMBDA_PRIOR = "Uniform(0,1)"
+VARIANT_KEYS = ("CHR", "SNP", "POS", "A1", "A2")
+IDENTITY_KEYS = ("CHR", "SNP", "POS")
+POSTERIOR_COLUMNS = (*VARIANT_KEYS, "BETA", "VAR_BETA")
 
 
 @dataclass(frozen=True, slots=True)
 class M3Result:
-    beta_target: np.ndarray
-    beta_target_variance: np.ndarray
-    mu_global: float
-    tau_squared: float
-    elbo: float
-    converged: bool
+    beta: np.ndarray
+    variance: np.ndarray
+    lambda_mean: np.ndarray
+    converged: np.ndarray
+    iterations: np.ndarray
+    elbo: np.ndarray
 
 
-def vi_bayes_paper(
-    mu_target: np.ndarray,
-    sigma_target: np.ndarray,
-    mu_base: np.ndarray,
-    sigma_base: np.ndarray,
+def calibrate_directional(
+    target_beta: np.ndarray,
+    target_variance: np.ndarray,
+    base_beta: np.ndarray,
+    base_variance: np.ndarray,
     *,
-    max_iter: int = 100,
+    max_iter: int = 1000,
     tol: float = 1e-6,
-    sigma0_squared: float = 1e6,
-    a: float = 0.001,
-    b: float = 0.001,
+    quadrature_points: int = 32,
 ) -> M3Result:
-    """Reproduce the recovered Rcpp M3 update equations.
+    """Fit the directional target-from-base mean-field model.
 
-    The historical implementation passes columns named ``VAR_BETA`` as the
-    ``sigma`` arguments and squares them inside this routine.  This behavior is
-    intentionally retained until a separate scientific review authorizes a
-    variance-interpretation change.
-
-    This routine has no ancestry-bridging lambda parameter. A manuscript
-    description of ``lambda ~ Uniform(0, 1)`` cannot be represented as an
-    implementation change without the authoritative analysis source or a
-    separately reviewed and numerically validated derivation.
+    The Uniform(0, 1) prior has constant log density zero. The lambda density
+    is optimized non-parametrically at fixed Gauss-Legendre nodes. Nodes do not
+    include the singular endpoints, log-sum-exp normalization prevents
+    underflow, and all input variances must be finite and strictly positive.
     """
 
-    mu_target = np.asarray(mu_target, dtype=np.float64)
-    sigma_target = np.asarray(sigma_target, dtype=np.float64)
-    mu_base = np.asarray(mu_base, dtype=np.float64)
-    sigma_base = np.asarray(sigma_base, dtype=np.float64)
-    if not (mu_target.shape == sigma_target.shape == mu_base.shape == sigma_base.shape):
-        raise ValueError("M3 posterior vectors must have identical shapes")
-    if mu_target.ndim != 1 or mu_target.size == 0:
-        raise ValueError("M3 posterior vectors must be non-empty one-dimensional arrays")
-    if not all(
-        np.isfinite(values).all()
-        for values in (mu_target, sigma_target, mu_base, sigma_base)
+    target_beta = _one_dimensional(target_beta, "target BETA")
+    target_variance = _one_dimensional(target_variance, "target VAR_BETA")
+    base_beta = _one_dimensional(base_beta, "base BETA")
+    base_variance = _one_dimensional(base_variance, "base VAR_BETA")
+    if not (
+        target_beta.shape
+        == target_variance.shape
+        == base_beta.shape
+        == base_variance.shape
     ):
-        raise ValueError("M3 posterior vectors must contain only finite values")
-    if np.any(sigma_target <= 0.0) or np.any(sigma_base <= 0.0):
-        raise ValueError(
-            "M3 requires strictly positive VAR_BETA inputs under the current HERCULES "
-            "variance-column interpretation"
-        )
+        raise ValueError("Stage-2 posterior vectors must have identical shapes")
+    if target_beta.size == 0:
+        raise ValueError("Stage-2 posterior vectors must not be empty")
+    if not np.isfinite(target_beta).all() or not np.isfinite(base_beta).all():
+        raise ValueError("Stage-2 posterior means must be finite")
+    for label, values in (
+        ("target VAR_BETA", target_variance),
+        ("base VAR_BETA", base_variance),
+    ):
+        if not np.isfinite(values).all() or np.any(values <= 0.0):
+            raise ValueError(f"{label} must contain finite values greater than zero")
+    if max_iter < 1:
+        raise ValueError("max_iter must be at least one")
+    if tol <= 0.0 or not np.isfinite(tol):
+        raise ValueError("tol must be finite and greater than zero")
+    if quadrature_points < 8:
+        raise ValueError("quadrature_points must be at least eight")
 
-    target_sigma_squared = np.square(sigma_target)
-    base_sigma_squared = np.square(sigma_base)
-    target_mean = mu_target.copy()
-    target_variance = target_sigma_squared.copy()
-    base_mean = mu_base.copy()
-    base_variance = base_sigma_squared.copy()
+    raw_nodes, raw_weights = leggauss(quadrature_points)
+    lambda_nodes = 0.5 * (raw_nodes + 1.0)
+    lambda_weights = 0.5 * raw_weights
+    log_weights = np.log(lambda_weights)
+    inverse_lambda = 1.0 / lambda_nodes
+    inverse_lambda_squared = np.square(inverse_lambda)
 
-    n_variants = mu_target.size
-    mu_global = 0.5 * (float(np.mean(target_mean)) + float(np.mean(base_mean)))
-    sigma_global_squared = 1e6
-    tau_squared = 1.0
-    previous_elbo = -np.inf
-    converged = False
+    mean = target_beta.copy()
+    variance = target_variance.copy()
+    lambda_mean = np.full(target_beta.shape, 0.5, dtype=np.float64)
+    elbo = np.full(target_beta.shape, -np.inf, dtype=np.float64)
+    converged = np.zeros(target_beta.shape, dtype=bool)
+    iterations = np.zeros(target_beta.shape, dtype=np.int32)
+    active = np.ones(target_beta.shape, dtype=bool)
 
-    for iteration in range(max_iter):
-        target_precision = 1.0 / target_sigma_squared
-        tau_precision = 1.0 / tau_squared
-        target_mean = (
-            target_precision * mu_target + tau_precision * mu_global
-        ) / (target_precision + tau_precision)
-        target_variance = 1.0 / (target_precision + tau_precision)
-
-        base_precision = 1.0 / base_sigma_squared
-        base_mean = (
-            base_precision * mu_base + tau_precision * mu_global
-        ) / (base_precision + tau_precision)
-        base_variance = 1.0 / (base_precision + tau_precision)
-
-        mu_global = (float(np.sum(target_mean)) + float(np.sum(base_mean))) / (
-            2.0 * n_variants + 1e-10
-        )
-        sigma_global_squared = 1.0 / (
-            1.0 / sigma0_squared + 2.0 * n_variants / tau_squared
-        )
-        numerator = (
-            float(np.sum(target_variance + np.square(target_mean - mu_global)))
-            + float(np.sum(base_variance + np.square(base_mean - mu_global)))
-            + 2.0 * b
-        )
-        tau_squared = numerator / (2.0 * n_variants + 2.0 * a + 2.0)
-
-        tau_precision = 1.0 / tau_squared
-        elbo = float(
-            np.sum(
-                -0.5 * np.log(2.0 * np.pi * target_sigma_squared)
-                - 0.5
-                * (np.square(mu_target - target_mean) + target_variance)
-                / target_sigma_squared
+    log_two_pi = np.log(2.0 * np.pi)
+    for iteration in range(1, max_iter + 1):
+        second_moment = variance + np.square(mean)
+        log_lambda_density_kernel = (
+            -np.log(lambda_nodes)[None, :]
+            - 0.5
+            / base_variance[:, None]
+            * (
+                second_moment[:, None] * inverse_lambda_squared[None, :]
+                - 2.0
+                * base_beta[:, None]
+                * mean[:, None]
+                * inverse_lambda[None, :]
+                + np.square(base_beta)[:, None]
             )
-            + np.sum(
-                -0.5 * np.log(2.0 * np.pi * base_sigma_squared)
-                - 0.5
-                * (np.square(mu_base - base_mean) + base_variance)
-                / base_sigma_squared
-            )
-            + np.sum(
-                -0.5 * np.log(2.0 * np.pi * tau_squared)
-                - 0.5
-                * tau_precision
-                * (np.square(target_mean - mu_global) + target_variance)
-            )
-            + np.sum(
-                -0.5 * np.log(2.0 * np.pi * tau_squared)
-                - 0.5
-                * tau_precision
-                * (np.square(base_mean - mu_global) + base_variance)
-            )
-            - 0.5 * np.log(2.0 * np.pi * sigma0_squared)
-            - 0.5 * (mu_global**2 + sigma_global_squared) / sigma0_squared
-            + a * np.log(b)
-            - math.lgamma(a)
-            - (a + 1.0) * np.log(tau_squared)
-            - b * tau_precision
-            + np.sum(0.5 * np.log(2.0 * np.pi * target_variance) + 0.5)
-            + np.sum(0.5 * np.log(2.0 * np.pi * base_variance) + 0.5)
+        )
+        log_normalizer = logsumexp(
+            log_lambda_density_kernel + log_weights[None, :], axis=1
+        )
+        log_mass = (
+            log_lambda_density_kernel
+            + log_weights[None, :]
+            - log_normalizer[:, None]
+        )
+        mass = np.exp(log_mass)
+        expected_inverse = mass @ inverse_lambda
+        expected_inverse_squared = mass @ inverse_lambda_squared
+        candidate_lambda_mean = mass @ lambda_nodes
+
+        candidate_precision = (
+            1.0 / target_variance
+            + expected_inverse_squared / base_variance
+        )
+        candidate_variance = 1.0 / candidate_precision
+        candidate_mean = candidate_variance * (
+            target_beta / target_variance
+            + base_beta * expected_inverse / base_variance
         )
 
-        if iteration > 0 and abs(elbo - previous_elbo) < tol:
-            converged = True
+        candidate_second_moment = candidate_variance + np.square(candidate_mean)
+        expected_log_lambda = mass @ np.log(lambda_nodes)
+        target_term = (
+            -0.5 * (log_two_pi + np.log(target_variance))
+            - 0.5
+            * (np.square(target_beta - candidate_mean) + candidate_variance)
+            / target_variance
+        )
+        base_term = (
+            -0.5 * (log_two_pi + np.log(base_variance))
+            - expected_log_lambda
+            - 0.5
+            / base_variance
+            * (
+                candidate_second_moment * expected_inverse_squared
+                - 2.0 * base_beta * candidate_mean * expected_inverse
+                + np.square(base_beta)
+            )
+        )
+        eta_entropy = 0.5 * np.log(2.0 * np.pi * np.e * candidate_variance)
+        log_density = log_lambda_density_kernel - log_normalizer[:, None]
+        lambda_entropy = -np.sum(mass * log_density, axis=1)
+        candidate_elbo = target_term + base_term + eta_entropy + lambda_entropy
+
+        previously_active = active.copy()
+        mean[previously_active] = candidate_mean[previously_active]
+        variance[previously_active] = candidate_variance[previously_active]
+        lambda_mean[previously_active] = candidate_lambda_mean[previously_active]
+        iterations[previously_active] = iteration
+        if iteration > 1:
+            newly_converged = previously_active & (
+                np.abs(candidate_elbo - elbo) <= tol
+            )
+            converged[newly_converged] = True
+            active[newly_converged] = False
+        elbo[previously_active] = candidate_elbo[previously_active]
+        if not np.any(active):
             break
-        previous_elbo = elbo
 
     return M3Result(
-        beta_target=target_mean,
-        beta_target_variance=target_variance,
-        mu_global=mu_global,
-        tau_squared=tau_squared,
-        elbo=previous_elbo,
+        beta=mean,
+        variance=variance,
+        lambda_mean=lambda_mean,
         converged=converged,
+        iterations=iterations,
+        elbo=elbo,
     )
 
 
 def integrate_posterior_tables(
-    m1_path: str | Path,
-    m2_path: str | Path,
+    target_path: str | Path,
+    base_path: str | Path,
     output_path: str | Path,
     *,
+    diagnostics_path: str | Path | None = None,
     max_iter: int = 1000,
     tol: float = 1e-6,
+    quadrature_points: int = 32,
 ) -> Path:
-    """Inner-join M1/M2 candidates and write the 100-column M3 score table."""
+    """Calibrate one selected target posterior from one selected base posterior."""
 
-    keys = ["CHR", "SNP", "POS", "A1", "A2"]
-    posterior_columns = [
-        *keys,
-        *(f"BETA_{index}" for index in range(100)),
-        *(f"VAR_BETA_{index}" for index in range(100)),
-    ]
-    m1 = pd.read_csv(m1_path, sep="\t", usecols=posterior_columns)
-    m2 = pd.read_csv(m2_path, sep="\t", usecols=posterior_columns)
-    merged = m1.merge(m2, on=keys, how="inner", suffixes=(".x", ".y"), sort=True)
-    if merged.empty:
-        raise ValueError(f"M1/M2 posterior intersection is empty: {m1_path}, {m2_path}")
-
-    model_indices = sorted(
-        int(column.removeprefix("BETA_").removesuffix(".x"))
-        for column in merged.columns
-        if column.startswith("BETA_") and column.endswith(".x")
+    target = _read_selected_posterior(target_path, "target")
+    base = _read_selected_posterior(base_path, "base")
+    shared_snps = target.merge(
+        base,
+        on="SNP",
+        how="inner",
+        suffixes=("_target", "_base"),
+        sort=False,
+        validate="one_to_one",
     )
-    if model_indices != list(range(100)):
+    if not shared_snps.empty:
+        identity_conflict = (
+            (shared_snps["CHR_target"] != shared_snps["CHR_base"])
+            | (shared_snps["POS_target"] != shared_snps["POS_base"])
+        )
+        if identity_conflict.any():
+            row = shared_snps.loc[identity_conflict].iloc[0]
+            raise ValueError(
+                "Incompatible target/base variant identity for "
+                f"{row['SNP']}: target={row['CHR_target']}:{row['POS_target']}, "
+                f"base={row['CHR_base']}:{row['POS_base']}"
+            )
+    target = target.assign(_target_order=np.arange(len(target), dtype=np.int64))
+    merged = target.merge(
+        base,
+        on=list(IDENTITY_KEYS),
+        how="inner",
+        suffixes=("_target", "_base"),
+        sort=False,
+        validate="one_to_one",
+    )
+    if merged.empty:
         raise ValueError(
-            "M3 requires the recovered 100-candidate grid with BETA_0..BETA_99; "
-            f"found {len(model_indices)} candidates"
+            f"Selected target/base posterior intersection is empty: {target_path}, {base_path}"
         )
-
-    beta_columns: dict[str, np.ndarray] = {}
-    for model_index in model_indices:
-        result = vi_bayes_paper(
-            merged[f"BETA_{model_index}.x"].to_numpy(),
-            merged[f"VAR_BETA_{model_index}.x"].to_numpy(),
-            merged[f"BETA_{model_index}.y"].to_numpy(),
-            merged[f"VAR_BETA_{model_index}.y"].to_numpy(),
-            max_iter=max_iter,
-            tol=tol,
+    incompatible = (
+        (merged["A1_target"] != merged["A1_base"])
+        | (merged["A2_target"] != merged["A2_base"])
+    )
+    if incompatible.any():
+        row = merged.loc[incompatible].iloc[0]
+        raise ValueError(
+            "Incompatible target/base alleles for "
+            f"{row['SNP']} at {row['CHR']}:{row['POS']}: "
+            f"target={row['A1_target']}/{row['A2_target']}, "
+            f"base={row['A1_base']}/{row['A2_base']}"
         )
-        if not np.isfinite(result.beta_target).all():
-            raise ValueError(f"M3 candidate {model_index} produced non-finite effects")
-        beta_columns[f"BETA_{model_index}"] = result.beta_target
+    merged = merged.sort_values("_target_order", kind="stable").reset_index(drop=True)
 
-    output = pd.concat(
-        [merged.loc[:, keys].reset_index(drop=True), pd.DataFrame(beta_columns)],
-        axis=1,
+    result = calibrate_directional(
+        merged["BETA_target"].to_numpy(),
+        merged["VAR_BETA_target"].to_numpy(),
+        merged["BETA_base"].to_numpy(),
+        merged["VAR_BETA_base"].to_numpy(),
+        max_iter=max_iter,
+        tol=tol,
+        quadrature_points=quadrature_points,
+    )
+    keys = pd.DataFrame(
+        {
+            "CHR": merged["CHR"],
+            "SNP": merged["SNP"],
+            "POS": merged["POS"],
+            "A1": merged["A1_target"],
+            "A2": merged["A2_target"],
+        }
+    )
+    posterior = keys.assign(BETA=result.beta, VAR_BETA=result.variance)
+    diagnostics = keys.assign(
+        LAMBDA_MEAN=result.lambda_mean,
+        CONVERGED=result.converged,
+        ITERATIONS=result.iterations,
+        ELBO=result.elbo,
     )
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    output.to_csv(destination, sep="\t", index=False)
+    if diagnostics_path is not None:
+        diagnostic_destination = Path(diagnostics_path)
+        diagnostic_destination.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics.to_csv(diagnostic_destination, sep="\t", index=False)
+    if not result.converged.all():
+        failed = np.flatnonzero(~result.converged)
+        example = merged.iloc[int(failed[0])]
+        raise RuntimeError(
+            "Directional M3 did not converge for "
+            f"{len(failed)} variant(s); first failure is {example['SNP']} at "
+            f"{example['CHR']}:{example['POS']}. Increase m3.max_iter or inspect "
+            "the convergence diagnostics before retrying."
+        )
+    posterior.to_csv(destination, sep="\t", index=False)
     return destination
+
+
+def _read_selected_posterior(path: str | Path, label: str) -> pd.DataFrame:
+    source = Path(path)
+    try:
+        table = pd.read_csv(source, sep="\t", usecols=list(POSTERIOR_COLUMNS))
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        raise ValueError(f"Could not read selected {label} posterior {source}: {exc}") from exc
+    if table.empty:
+        raise ValueError(f"Selected {label} posterior is empty: {source}")
+    if table["SNP"].duplicated().any() or table.duplicated(list(IDENTITY_KEYS)).any():
+        duplicate = table.loc[
+            table["SNP"].duplicated(keep=False) | table.duplicated(list(IDENTITY_KEYS), keep=False),
+            "SNP",
+        ].iloc[0]
+        raise ValueError(f"Selected {label} posterior contains duplicate SNP key: {duplicate}")
+    if table.loc[:, list(VARIANT_KEYS)].isna().any().any():
+        raise ValueError(f"Selected {label} posterior contains missing variant keys")
+    for column in ("BETA", "VAR_BETA"):
+        values = pd.to_numeric(table[column], errors="coerce").to_numpy(dtype=np.float64)
+        if not np.isfinite(values).all():
+            raise ValueError(f"Selected {label} posterior column {column} must be finite")
+        if column == "VAR_BETA" and np.any(values <= 0.0):
+            raise ValueError(
+                f"Selected {label} posterior VAR_BETA must be finite and greater than zero"
+            )
+        table[column] = values
+    return table
+
+
+def _one_dimensional(values: np.ndarray, label: str) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        raise ValueError(f"{label} must be a one-dimensional vector")
+    return array

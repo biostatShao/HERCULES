@@ -1,41 +1,51 @@
 # Changelog
 
-## 1.0.1 - unreleased
+## 1.0.2 - unreleased
+
+### Corrected
+
+- Defined Stage-1 `BETA` as `gamma*mu` and `VAR_BETA` as the marginal posterior
+  variance.
+- Kept `var_prior` as the first-E-step variance initialization and restored the
+  subsequent EM update of `tau_beta`.
+- Added quantitative R2 and binary AUC selection for the fixed 10 by 10 M1/M2
+  candidate grid.
+- Replaced the reconstructed common-global-mean M3 with directional, pairwise
+  base-to-target calibration under `lambda_j ~ Uniform(0,1)`.
+- Changed M3 to read one selected target and one selected base posterior,
+  consume `VAR_BETA` directly, and emit one calibrated effect vector plus
+  convergence diagnostics.
+- Replaced the former multi-score ensemble with exactly two target predictors:
+  selected target Stage-1 and calibrated Stage-2 scores.
+- Added explicit, disjoint target validation and test inputs. Test outcomes are
+  read only after Stage-3 fitting and prediction.
+- Corrected SuperLearner libraries to Lasso/ridge/neural network for
+  quantitative traits and Lasso/neural network with `method.AUC` for binary
+  traits.
+- Added scientific model identifiers to checkpoint/configuration hashes so old
+  M3 and ensemble checkpoints cannot be reused.
+- Excluded PLINK2's `NAMED_ALLELE_DOSAGE_SUM` diagnostic from score predictors.
+- Added explicit CHR/POS conflict detection for shared SNP identifiers and
+  IID-ordered test phenotype matching.
+- Removed non-scientific wall-clock timings from the serialized Stage-3 model
+  so clean source and wheel installations produce identical model artifacts.
+- Made M3 non-convergence a stage failure while retaining its diagnostic table.
+- Rejected chromosome, predictor, or phenotype IID-set mismatches instead of
+  silently reducing validation/test cohorts through inner joins.
 
 ### Added
 
-- Unified `hercules` Python namespace and command-line interface.
-- YAML configuration, validation, stage registry, manifests, and checkpoints.
-- Self-contained Python, Cython, and C++ scientific runtime.
-- M1, M2, M3, PLINK2 scoring, and R ensemble execution.
-- Deterministic quantitative and binary example data.
-- Source installation through `pip install .`.
-- Linux build, clean-install, and test workflow.
-- Explicit stage-specific per-SNP variance initialization for M1 and M2.
-  FastGWA input keeps the normal association P value in `P` and accepts an
-  initial variance in optional `var_prior`. Missing `var_prior` values default
-  to one. The first E-step uses `tau_beta_j = 1/var_prior_j`; subsequent
-  M-steps update `tau_beta` through the original EM equation.
+- Direct scientific unit tests for Stage-1 posterior moments, M3 directionality
+  and ELBO diagnostics, strict posterior alignment, and Stage-3 data isolation.
+- Independent target validation/test synthetic genotype and phenotype files.
+- Clearly separated selected posteriors, calibrated posterior, score matrices,
+  serialized Stage-3 model, predictions, metrics, hyperparameters, and M3
+  diagnostics.
 
-### Validation
+### Validation limitation
 
-- Native source build and clean installation passed on Linux CPython 3.11.
-- All 67 automated tests passed, including strict FastGWA input validation,
-  both `var_prior` initialization branches, and a direct M-step `tau_beta`
-  update test.
-- Quantitative and binary end-to-end example workflows passed.
-- The corrected editable and clean-wheel quantitative outputs matched exactly
-  across M1, M2, M3, scoring, and ensemble tables (maximum absolute numerical
-  difference `0.0`).
-- A complete quantitative run without `var_prior` verified the documented
-  all-ones initialization fallback through M1, M2, M3, scoring, and ensemble
-  execution.
-- The deterministic pre-unification and clean-package example outputs matched
-  exactly across M1, M2, M3, scoring, and ensemble tables (maximum absolute
-  numerical difference `0.0`); this comparison predates the fixed-prior
-  correction and is not evidence of equivalence for the corrected inference.
-- One historical M3 comparison passed the documented float64 tolerance.
-- Historical M1/M2 comparisons did not pass the predefined float32 tolerance.
-- Full scientific equivalence has not yet been demonstrated.
+The implementation is tested against the supplied mathematical specification
+and deterministic synthetic examples. It has not yet been numerically compared
+with authoritative historical result-generating manuscript outputs.
 
 No package, container, tag, or release has been published.

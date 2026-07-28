@@ -1,335 +1,324 @@
 # HERCULES
 
-HERCULES is a cross-ancestry polygenic risk score workflow with three model
-stages and a final ensemble:
+HERCULES is a Linux-oriented cross-ancestry polygenic-score workflow. Version
+1.0.2 implements three scientific stages:
 
-- M1 fits the target-ancestry model grid and scores the target genotype.
-- M2 fits the base-ancestry model grid and scores the target genotype.
-- M3 integrates the paired M1 and M2 posterior tables.
-- The ensemble combines selected and grid scores for quantitative or binary
-  traits.
+1. **M1** fits and selects the target-population Stage-1 model.
+2. **M2** fits and selects one designated base-population Stage-1 model.
+3. **M3** directionally calibrates the selected base posterior to the selected
+   target posterior using a SNP-specific ancestry-bridging parameter.
 
-All public interfaces use one name:
+The final Stage-3 learner uses exactly two target-sample scores: the selected
+target Stage-1 score and the calibrated Stage-2 score.
+
+The package includes the Python/Cython/C++ inference runtime, workflow CLI,
+PLINK2 scoring integration, an R SuperLearner boundary, example configuration,
+and deterministic public synthetic data.
+
+## Scientific workflow
+
+### M1 and M2
+
+M1 uses target GWAS statistics, target LD, and target validation samples. M2
+uses base GWAS statistics, base LD, and base validation samples. Each stage
+fits the existing 10 by 10 grid of fixed `pi` and residual-variance values and
+selects one candidate using validation R2 for quantitative traits or validation
+AUC for binary traits.
+
+For SNP `j`, optional `var_prior` initializes the first variational iteration:
 
 ```text
-Python package: hercules
-Command line:   hercules
-R function:     HERCULES()
-Configuration:  hercules.yaml
-Outputs:        HERCULES_M1, HERCULES_M2, HERCULES_M3, HERCULES_ensemble
+v_j^(0)        = var_prior_j
+tau_beta,j^(0) = 1 / var_prior_j
 ```
 
-## Supported platform
+If `var_prior` is absent, the initial variance is one. The values are only
+initialization values. After the first E-step, the M-step replaces them using:
 
-The validated platform is Linux x86-64 with Python 3.11. HERCULES contains
-Cython/C++/OpenMP extensions, so installation from source requires a C/C++
-compiler. Native Windows installation has not been validated; Windows users
-should use WSL2, a Linux server, or a Linux container.
+```text
+zeta_j  = gamma_j * (v_j + mu_j^2)
+tau_beta = pi * M / sum_j(zeta_j)
+```
 
-The complete workflow also needs:
+`pi` and residual variance stay fixed inside each grid candidate. Stage-1
+posterior output is defined as:
 
-- PLINK 1.9;
-- PLINK2;
-- R with `data.table`, `SuperLearner`, `glmnet`, and `pROC`;
-- legal user-provided GWAS, LD, genotype, phenotype, and annotation inputs.
+```text
+BETA_j     = gamma_j * mu_j
+VAR_BETA_j = gamma_j * (v_j + mu_j^2) - (gamma_j * mu_j)^2
+```
+
+`VAR_BETA` is the marginal posterior variance.
+
+### Directional M3 calibration
+
+For one base/target pair, M3 reads only the two selected Stage-1 posterior
+tables. For each aligned SNP:
+
+```text
+eta_j | lambda_j, b_base_j, V_base_j
+  ~ Normal(lambda_j * b_base_j, lambda_j^2 * V_base_j)
+
+b_target_j | eta_j, V_target_j
+  ~ Normal(eta_j, V_target_j)
+
+lambda_j ~ Uniform(0, 1)
+```
+
+The implementation uses the mean-field factorization
+`q(eta_j, lambda_j) = q(eta_j) q(lambda_j)`. `q(eta_j)` is Gaussian and
+`q(lambda_j)` is represented on bounded Gauss-Legendre quadrature nodes over
+`(0,1)`. The optimized ELBO is
+
+```text
+E_q[log p(b_target | eta, V_target)
+  + log p(eta | lambda, b_base, V_base)
+  + log p(lambda)]
++ H[q(eta)] + H[q(lambda)].
+```
+
+Initialization sets the Gaussian mean and variance to the target Stage-1
+posterior values; the first coordinate update derives `q(lambda)` from that
+state. Updates stop when the absolute ELBO change is at most `m3.tol` (default
+`1e-6`) or `m3.max_iter` (default `1000`) is reached. Log-domain normalization,
+strictly interior quadrature nodes, and positive-variance validation provide
+numerical safeguards.
+
+An M3 chromosome is not checkpointed or scored if any calibrated variant has
+not converged. Its diagnostic table is retained so the failed SNPs and iteration
+counts can be inspected before retrying.
+
+The returned calibrated effect is `BETA = E_q(eta_j)`. M3 is directional and
+pairwise, does not read GWAS likelihoods, LD, annotations, phenotypes, or the
+100 unselected Stage-1 candidates, and uses `VAR_BETA` directly without
+squaring it.
+
+### Final Stage 3
+
+HERCULES scores the target validation and independent target test genotypes
+with exactly:
+
+```text
+target_stage1_score    = X_target * b_target
+calibrated_stage2_score = X_target * theta_target
+```
+
+The validation and test IIDs must be disjoint. The learner is fitted only on
+target validation data, frozen, and then applied to target test predictors.
+The optional test phenotype is used only for final R2/AUC evaluation.
+Chromosome score files, the two predictor vectors, and phenotype tables must
+cover the same cohort IIDs; HERCULES fails instead of silently shrinking a
+cohort through an inner join.
+
+- Quantitative: Lasso, ridge, and neural-network base learners.
+- Binary: Lasso and neural-network base learners, binomial family, and
+  `method.AUC` meta-learning.
+
+## Platform and dependencies
+
+Validated deployment target: Linux x86-64 with Python 3.11. Native Windows has
+not been validated; Windows users should use WSL2, a Linux server, or a Linux
+container/environment.
+
+Required for the complete workflow:
+
+- Python 3.11 and a C/C++ compiler for source installation;
+- PLINK 1.9 and PLINK2;
+- R and R packages `SuperLearner`, `glmnet`, `nnet`, `pROC`, and `data.table`;
+- an OpenMP-capable compiler and BLAS are recommended.
 
 ## Installation
 
-### Download or clone, then install
-
-This is the recommended installation method because it compiles the native
-extensions for the user's own Linux environment instead of relying on a wheel
-built on another computer.
+Clone or download the repository on Linux, then install from source:
 
 ```bash
-git clone https://github.com/biostatShao/HERCULES.git
-cd HERCULES
-
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install .
-```
-
-Development installation:
-
-```bash
-python -m pip install -e ".[test]"
-pytest
-```
-
-Direct installation from GitHub is also possible after the repository is
-published:
-
-```bash
-python -m pip install "git+https://github.com/biostatShao/HERCULES.git"
-```
-
-Prebuilt wheels may be added later for individually tested Python/platform
-combinations. A single wheel is not portable across arbitrary operating
-systems, Python versions, or CPU architectures.
-
-## Verify the installation
-
-```bash
 hercules --version
-hercules --help
 hercules doctor
 ```
 
-With a configured workflow:
+Installing from source builds native extensions for the user's own Linux and
+Python environment, avoiding dependence on a wheel built on another machine.
+For development and tests:
 
 ```bash
-hercules doctor --config hercules.yaml
-hercules config validate hercules.yaml
+python -m pip install -e '.[test]'
+pytest
 ```
 
-## Run the included example
+## Run the included examples
 
-The repository contains a small deterministic two-ancestry dataset under
-`examples/data/`. It contains 160 samples per ancestry and 64 variants on
-chromosome 22. It contains no private research data.
-
-The example configuration uses paths relative to the repository root. Update
-the three executable paths in the YAML files if PLINK, PLINK2, or Rscript are
-not on `PATH`.
+The repository includes deterministic synthetic data only; it contains no real
+participants. From the repository root:
 
 ```bash
 hercules config validate examples/data/hercules.quantitative.yaml
 hercules run --config examples/data/hercules.quantitative.yaml
-
-hercules config validate examples/data/hercules.binary.yaml
 hercules run --config examples/data/hercules.binary.yaml
 ```
 
-To regenerate the example instead of using the committed fixture:
+Edit the executable paths in the YAML files when PLINK, PLINK2, or Rscript are
+not on `PATH`.
+
+## Input files
+
+### GWAS summary statistics
+
+M1 and M2 require separate tab-delimited fastGWA-style files. Required columns:
+
+| Column | Meaning |
+|---|---|
+| `CHR` | Chromosome |
+| `SNP` | Unique variant identifier |
+| `POS` | Base-pair position |
+| `A1` | Effect allele |
+| `A2` | Other allele |
+| `N` | GWAS sample size |
+| `AF1` | Effect-allele frequency |
+| `BETA` | Marginal GWAS effect estimate |
+| `SE` | Standard error |
+| `P` | Ordinary GWAS association P value |
+| `var_prior` | Optional positive, finite SNP-specific initialization variance |
+
+Do not put a variance in `P`. HERCULES internally copies `var_prior` into the
+initial variance field while retaining the ordinary P value. Missing
+`var_prior` defaults to one. Duplicate SNPs, invalid alleles, and non-positive
+or non-finite supplied variances are rejected.
+
+Paths may contain `{chrom}` for chromosome-specific files.
+
+### LD and genotype inputs
+
+- `inputs.ld_reference.target`: target ancestry-matched magenpy LD store.
+- `inputs.ld_reference.base`: base ancestry-matched magenpy LD store.
+- `inputs.target_validation_genotype`: target validation PLINK prefix.
+- `inputs.target_test_genotype`: independent target test PLINK prefix.
+- `inputs.genotype_prefixes.base_validation` or
+  `m2.validation_genotype`: base validation PLINK prefix.
+
+Each PLINK prefix identifies `.bed`, `.bim`, and `.fam` files. The target
+validation and test sample sets must not overlap.
+
+### Phenotype inputs
+
+`inputs.target_validation_phenotype` and optional
+`inputs.target_test_phenotype` are tab-delimited tables with:
+
+- `IID`;
+- the column named by `inputs.phenotype_column`;
+- every covariate listed in `inputs.covariates`.
+
+The validation table trains Stage 3. The test table is never passed to model
+fitting and is needed only to calculate the final metric.
+
+M1/M2 candidate selection uses PLINK phenotype and keep files configured under
+`m1` and `m2`. These are ancestry-matched validation samples, not the final
+independent target test set.
+
+### Annotation inputs
+
+`inputs.functional_annotation` and `inputs.per_snp_heritability` record the
+upstream annotation resources used to derive `var_prior`. The current public
+runtime does not estimate SNP variances from raw annotation columns; the
+positive derived values must be supplied in each ancestry's summary-statistics
+file.
+
+## YAML configuration
+
+Start from [examples/hercules.example.yaml](examples/hercules.example.yaml).
+Important fields are:
+
+| Field | Description |
+|---|---|
+| `trait_name` | Safe output/run identifier |
+| `chromosomes` | Chromosomes to process |
+| `base_ancestry`, `target_ancestry` | Directional base and target labels |
+| `inputs.summary_statistics.base_path` | M2 summary statistics |
+| `inputs.summary_statistics.target_path` | M1 summary statistics |
+| `inputs.ld_reference.base/target` | Ancestry-matched LD stores |
+| `inputs.target_validation_genotype` | Target validation PLINK prefix |
+| `inputs.target_validation_phenotype` | Stage-3 training phenotype table |
+| `inputs.target_test_genotype` | Independent target test PLINK prefix |
+| `inputs.target_test_phenotype` | Optional final-evaluation phenotype table |
+| `inputs.phenotype_column` | Outcome column |
+| `inputs.covariates` | Covariate columns |
+| `inputs.trait_type` | `quantitative` or `binary` |
+| `m1.validation_*` | Target Stage-1 model-selection files |
+| `m2.validation_*` | Base Stage-1 model-selection files |
+| `m3.max_iter`, `m3.tol` | Coordinate-optimization stopping settings |
+| `m3.quadrature_points` | Bounded lambda quadrature resolution |
+| `execution.seed` | Python/R deterministic seed |
+| `tools.plink/plink2/rscript` | Executable names or absolute paths |
+| `checkpoint.enabled/resume` | Versioned stage checkpoints |
+
+The scientific settings `m3.model`, `m3.lambda_prior`, the 10 by 10 Stage-1
+grid, and Stage-3 learner libraries are validated against the implemented
+method and cannot silently select a different default model.
+
+Configuration precedence is CLI override, environment variable, YAML value,
+then package default where a command exposes an override.
+
+## CLI
 
 ```bash
-python examples/synthetic/generate_fixture.py \
-  --output examples/data \
-  --plink /path/to/plink \
-  --plink2 /path/to/plink2 \
-  --rscript /path/to/Rscript
-```
-
-## Configure a real analysis
-
-Copy the template and replace its paths:
-
-```bash
-cp examples/hercules.example.yaml hercules.yaml
+hercules --help
+hercules --version
+hercules doctor
 hercules config validate hercules.yaml
 hercules run --config hercules.yaml
-```
-
-Individual dependency-aware stages are available:
-
-```bash
 hercules stage m1 --config hercules.yaml
 hercules stage m2 --config hercules.yaml
 hercules stage m3 --config hercules.yaml
 hercules ensemble --config hercules.yaml
 ```
 
-Requesting M3 or the ensemble automatically runs missing prerequisite stages.
-Checkpoints include the trait, chromosome, stage, and configuration hash.
+M3 requires completed selected M1/M2 posteriors. Ensemble requires M1 and M3
+outputs. Checkpoints include the package version and scientific model IDs, so
+checkpoints made by the replaced M3/ensemble implementation are not reused.
 
-## Input files
+## Outputs
 
-### GWAS summary statistics
-
-M1 reads the target-ancestry summary-statistics file and M2 reads the
-base-ancestry file. Both files must be tab-delimited FastGWA-style tables with
-the following exact, case-sensitive column names:
-
-| Column | Required | Meaning and validation |
-|---|---:|---|
-| `CHR` | yes | Chromosome identifier. |
-| `SNP` | yes | Variant identifier, normally an rsID. |
-| `POS` | yes | Positive base-pair position. |
-| `A1` | yes | Effect allele corresponding to `BETA`. |
-| `A2` | yes | Other allele. |
-| `N` | yes | Positive per-SNP GWAS sample size. |
-| `AF1` | yes | Effect-allele frequency in the range 0–1. |
-| `BETA` | yes | GWAS effect estimate. |
-| `SE` | yes | Positive standard error of `BETA`. |
-| `P` | yes | Normal association P value in the range 0–1. |
-| `var_prior` | optional | Precomputed positive, finite per-SNP effect-size variance used to initialize `tau_beta`. |
-
-Example:
-
-```text
-CHR  SNP       POS      A1  A2  N      AF1   BETA    SE     P       var_prior
-22   rs10001   1000000  G   A   50000  0.15  0.006   0.020  0.7642  0.0200
-22   rs10002   1010000  T   C   50000  0.17 -0.007   0.021  0.7389  0.0205
-```
-
-- when `var_prior` is present, its values initialize the per-SNP prior
-  variances;
-- when `var_prior` is absent, every SNP receives initial prior variance `1`;
-- the first E-step uses `tau_beta_j = 1 / var_prior_j`;
-- every following M-step updates `tau_beta` through the original EM equation,
-  `tau_beta = pi * m / sum(zeta)`, separately for each grid model.
-
-Consequently, `var_prior` controls initialization but is not held fixed during
-inference. After the first M-step, `tau_beta` is the EM estimate rather than the
-original row-wise input values.
-
-If `var_prior` is present, every row must contain a numeric value greater than
-zero. Missing, zero, negative, infinite, or non-numeric values cause the run to
-stop before model fitting. Additional input columns are permitted but are not
-passed to the inference parser.
-
-### LD reference
-
-`inputs.ld_reference.base` and `inputs.ld_reference.target` must point to
-compatible magenpy LD stores. A path may contain `{chrom}` or `{chromosome}`;
-the placeholder is replaced separately for every configured chromosome. SNP
-identifiers, positions and alleles must be compatible with the corresponding
-summary-statistics file.
-
-### Genotype files
-
-Genotypes must use a complete PLINK prefix:
-
-- BED format: `.bed`, `.bim` and `.fam`; or
-- PGEN format: `.pgen`, `.pvar` and `.psam`.
-
-`inputs.genotype_prefixes.target` is used for final PRS scoring.
-`inputs.validation_genotype` is the default M1 validation genotype.
-`inputs.genotype_prefixes.base_validation` is the default M2 validation
-genotype and may be overridden by `m2.validation_genotype`.
-
-### Phenotype, covariates and validation files
-
-`inputs.phenotype_file` is a tab-delimited table used by the final ensemble. It
-must contain `IID`, the column named by `inputs.phenotype_column`, and every
-column listed under `inputs.covariates`.
-
-The M1/M2 `validation_phenotype` files use the standard PLINK three-column,
-header-free layout:
-
-```text
-FID  IID  phenotype
-```
-
-An optional `validation_keep` file contains `FID` and `IID`, without a header.
-For binary traits, phenotype values must follow the coding expected by the
-configured PLINK validation data and the final R ensemble.
-
-### Functional input files
-
-`inputs.functional_annotation` and `inputs.per_snp_heritability` record and
-validate the source functional files used to produce `var_prior`. The current
-runtime does not estimate `var_prior` from raw annotations; that preprocessing
-must be completed before running HERCULES.
-
-## YAML configuration reference
-
-Start from `examples/hercules.example.yaml`. Paths may be absolute or relative
-to the directory from which the command is run.
-
-### Analysis identity
-
-| Parameter | Description |
+| Output | Contents |
 |---|---|
-| `trait_name` | Trait identifier used in manifests and checkpoints. It must be safe for use in filenames. |
-| `chromosomes` | List of chromosomes to process, for example `[1, 2, 22]`. |
-| `base_ancestry` | Label for the base ancestry used by M2. |
-| `target_ancestry` | Label for the target ancestry used by M1 and final scoring. |
-
-### `inputs`
-
-| Parameter | Description |
-|---|---|
-| `summary_statistics.base_path` | Base-ancestry FastGWA file or chromosome path template. |
-| `summary_statistics.target_path` | Target-ancestry FastGWA file or chromosome path template. |
-| `summary_statistics.base_columns` | Keep `{}` for the strict FastGWA interface. |
-| `summary_statistics.target_columns` | Keep `{}` for the strict FastGWA interface. |
-| `functional_annotation` | Optional raw annotation file retained as input metadata. Use `""` if unavailable. |
-| `per_snp_heritability` | Optional file from which `var_prior` was prepared. Use `""` if unavailable. |
-| `ld_reference.base` | Base-ancestry magenpy LD path or template. |
-| `ld_reference.target` | Target-ancestry magenpy LD path or template. |
-| `genotype_prefixes.base_validation` | Base-ancestry PLINK validation prefix used by M2. |
-| `genotype_prefixes.target` | Target-ancestry PLINK prefix used for M1/M2/M3 scoring. |
-| `validation_genotype` | Default target validation PLINK prefix used by M1. |
-| `phenotype_file` | Final ensemble phenotype/covariate table. |
-| `phenotype_column` | Outcome column in `phenotype_file`. |
-| `covariates` | Covariate column names; use `[]` when no covariates are required. |
-| `trait_type` | `quantitative` or `binary`. |
-
-### Output and executables
-
-| Parameter | Description |
-|---|---|
-| `output_dir` | Final scores, ensemble results, manifests and checkpoints. |
-| `temporary_dir` | Per-chromosome posteriors, internal summary statistics and subprocess files. |
-| `tools.plink` | PLINK 1.9 executable name or absolute path. |
-| `tools.plink2` | PLINK2 executable name or absolute path. |
-| `tools.rscript` | Rscript executable name or absolute path. |
-
-### `execution`
-
-| Parameter | Description |
-|---|---|
-| `threads` | Native inference threads. Use `1` for the validated deterministic mode. |
-| `parallel_jobs` | Number of chromosome/model worker processes. Use `1` for deterministic validation. |
-| `seed` | Python and ensemble random seed; the default validated seed is `7209`. |
-
-### `m1` and `m2`
-
-Both stages use the same keys, but M1 reads target-ancestry inputs while M2
-reads base-ancestry inputs.
-
-| Parameter | Description |
-|---|---|
-| `hyperparameter_search` | Use `grid` for the validated workflow. |
-| `grid_metric` | Model-selection criterion: normally `validation`; `ELBO` and `pseudo_validation` are supported by the internal runner where their required inputs are available. |
-| `pi_steps` | Number of causal-proportion grid values; validated default `10`. |
-| `sigma_epsilon_steps` | Number of residual-variance grid values; validated default `10`. |
-| `max_iter` | Maximum variational inference iterations; validated default `500`. |
-| `sumstats_format` | Must be `fastgwa`. |
-| `backend` | Optional magenpy genotype backend; validated value `plink`. |
-| `validation_genotype` | Optional stage-specific validation PLINK prefix. M1/M2 have ancestry-specific defaults described above. |
-| `validation_phenotype` | PLINK-format phenotype used for grid-model selection. |
-| `validation_keep` | Optional PLINK-format sample keep file. |
-
-The `var_prior` initialization and subsequent EM updates are automatic and do
-not require a YAML parameter.
-
-### `m3`, `ensemble`, checkpoints and logging
-
-| Parameter | Description |
-|---|---|
-| `m3.max_iter` | Maximum M3 integration iterations; validated default `1000`. |
-| `m3.tol` | M3 convergence tolerance; validated default `1e-6`. |
-| `ensemble.quantitative_learners` | Documents the validated quantitative SuperLearner candidates, `SL.glmnet` and `SL.ridge`. |
-| `ensemble.binary_selection` | Documents the validated binary rule, `best_individual_auc`. |
-| `checkpoint.enabled` | Write stage completion markers. |
-| `checkpoint.resume` | Reuse outputs only when the checkpoint and configuration hash match. |
-| `logging.level` | Logging level such as `INFO` or `DEBUG`. |
-| `logging.file` | Optional log path; use `""` for console/default logging. |
-
-Supported path placeholders are `{chrom}`, `{chromosome}` and `{ancestry}`.
-
-Configuration precedence is:
-
-```text
-CLI override > HERCULES__... environment variable > YAML > package default
-```
+| `HERCULES_M1.selected-posterior.tsv.gz` | Selected target Stage-1 posterior |
+| `HERCULES_M2.selected-posterior.tsv.gz` | Selected base Stage-1 posterior |
+| `HERCULES_M1/M2.selected-hyperparameters.tsv` | Selected grid settings |
+| `HERCULES_M3.calibrated-posterior.tsv.gz` | One directional calibrated effect vector |
+| `HERCULES_M3.convergence-diagnostics.tsv` | Lambda mean, convergence, iterations, ELBO |
+| `HERCULES_ensemble.validation-scores.tsv` | Validation `IID`, p1, p2 |
+| `HERCULES_ensemble.test-scores.tsv` | Test `IID`, p1, p2 |
+| `HERCULES_ensemble.model.rds` | Frozen fitted Stage-3 model |
+| `HERCULES_ensemble.predictions.tsv` | Independent test predictions |
+| `HERCULES_ensemble.metrics.tsv` | Optional final R2 or AUC |
 
 ## R interface
 
+Source [R/HERCULES.R](R/HERCULES.R) and call:
+
 ```r
-source("R/HERCULES.R")
-HERCULES("hercules.yaml")
+HERCULES("/absolute/path/hercules.yaml")
 ```
 
-Python owns configuration, orchestration, manifests, checkpoints, and external
-process handling. R is used only for the final validated ensemble procedure.
+This is a thin interface to the installed `hercules run` command. Python owns
+configuration, stages, checkpoints, and external processes; R performs the
+specified SuperLearner procedure.
+
+## Validation status
+
+The corrected workflow has automated unit tests and deterministic synthetic
+Linux smoke tests. See [VALIDATION.md](VALIDATION.md) for commands and observed
+results.
+
+No authoritative historical result-generating Stage-2 outputs were available
+for an old-versus-new manuscript-result comparison. Therefore:
+
+> The implementation follows the scientific specification documented above,
+> but equivalence to the historical manuscript results has not yet been
+> demonstrated by numerical comparison.
 
 ## License and attribution
 
-HERCULES is distributed under the MIT License. Required upstream copyright and
-derivative-work attribution are preserved in [LICENSE](LICENSE) and
-[NOTICE](NOTICE).
+See [LICENSE](LICENSE), [NOTICE](NOTICE), and [CITATION.cff](CITATION.cff).

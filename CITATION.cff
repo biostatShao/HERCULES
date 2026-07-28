@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use HERCULES, cite the HERCULES manuscript and preserve the attribution described in NOTICE."
 title: "HERCULES"
 type: software
-version: 1.0.1
+version: 1.0.2
 authors:
   - family-names: Shao
     given-names: Zhonghe

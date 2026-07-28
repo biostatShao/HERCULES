@@ -96,7 +96,7 @@ def _resolve_executable(command: str) -> str | None:
 
 def _r_packages(rscript: str) -> Diagnostic:
     resolved = _resolve_executable(rscript)
-    packages = ("SuperLearner", "glmnet", "pROC", "data.table")
+    packages = ("SuperLearner", "glmnet", "nnet", "pROC", "data.table")
     if resolved is None:
         return Diagnostic("full pipeline", "R packages", False, "Rscript is unavailable")
     package_vector = ",".join(f'"{package}"' for package in packages)

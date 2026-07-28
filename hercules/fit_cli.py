@@ -583,7 +583,11 @@ def fit_model(model, data_dict, args):
             # we need to extract the final model from the BMA object:
             m = m.average_models()
         elif args.hyp_search == 'GS':
-            m = m.select_best_model(data_dict['valid'], criterion=args.grid_metric)
+            m = m.select_best_model(
+                data_dict['valid'],
+                criterion=args.grid_metric,
+                validation_metric=args.validation_metric,
+            )
 
         valid_end_time = time.time()
 
@@ -746,6 +750,13 @@ def main():
     parser.add_argument('--grid-metric', dest='grid_metric', type=str, default='validation',
                         help='The metric for selecting best performing model in grid search.',
                         choices={'ELBO', 'validation', 'pseudo_validation'})
+    parser.add_argument(
+        '--validation-metric',
+        dest='validation_metric',
+        choices={'r2', 'auc'},
+        default='r2',
+        help='Metric used to select a grid candidate on ancestry-matched validation samples.',
+    )
 
     # Grid-related parameters:
     parser.add_argument('--pi-grid', dest='pi_grid', type=str,

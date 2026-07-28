@@ -2,114 +2,223 @@ suppressPackageStartupMessages({
   library(data.table)
   library(SuperLearner)
   library(glmnet)
+  library(nnet)
   library(pROC)
 })
 
+SL.lasso.HERCULES <- function(Y, X, newX, family, obsWeights, id, ...) {
+  SuperLearner::SL.glmnet(
+    Y = Y, X = X, newX = newX, family = family,
+    obsWeights = obsWeights, id = id, alpha = 1, ...
+  )
+}
+
+SL.ridge.HERCULES <- function(Y, X, newX, family, obsWeights, id, ...) {
+  SuperLearner::SL.glmnet(
+    Y = Y, X = X, newX = newX, family = family,
+    obsWeights = obsWeights, id = id, alpha = 0, ...
+  )
+}
+
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 7L) {
+if (length(args) != 9L) {
   stop(
-    "Usage: ensemble_superlearner.R predictors phenotype phenotype_column covariates trait_type output_prefix seed",
+    paste(
+      "Usage: ensemble_superlearner.R validation_predictors validation_phenotype",
+      "test_predictors test_phenotype_or_empty phenotype_column covariates",
+      "trait_type output_prefix seed"
+    ),
     call. = FALSE
   )
 }
 
-predictor_path <- args[[1L]]
-phenotype_path <- args[[2L]]
-phenotype_column <- args[[3L]]
-covariates <- if (nzchar(args[[4L]])) strsplit(args[[4L]], ",", fixed = TRUE)[[1L]] else character()
-trait_type <- args[[5L]]
-output_prefix <- args[[6L]]
-seed <- as.integer(args[[7L]])
+validation_predictor_path <- args[[1L]]
+validation_phenotype_path <- args[[2L]]
+test_predictor_path <- args[[3L]]
+test_phenotype_path <- args[[4L]]
+phenotype_column <- args[[5L]]
+covariates <- if (nzchar(args[[6L]])) strsplit(args[[6L]], ",", fixed = TRUE)[[1L]] else character()
+trait_type <- args[[7L]]
+output_prefix <- args[[8L]]
+seed <- as.integer(args[[9L]])
 set.seed(seed)
 
-predictors <- fread(predictor_path)
-phenotype <- fread(phenotype_path)
-if (!("IID" %in% names(predictors))) stop("Predictor table must contain IID", call. = FALSE)
-if (!(phenotype_column %in% names(phenotype))) {
-  stop(sprintf("Phenotype column is absent: %s", phenotype_column), call. = FALSE)
-}
-
-phenotype_id <- names(phenotype)[[1L]]
-phenotype_columns <- unique(c(phenotype_id, phenotype_column, covariates))
-missing_covariates <- setdiff(covariates, names(phenotype))
-if (length(missing_covariates)) {
-  stop(sprintf("Missing phenotype covariates: %s", paste(missing_covariates, collapse = ",")), call. = FALSE)
-}
-
-data <- merge(
-  phenotype[, ..phenotype_columns],
-  predictors,
-  by.x = phenotype_id,
-  by.y = "IID"
-)
-data <- as.data.frame(na.omit(data))
-if (nrow(data) < 4L) stop("At least four complete samples are required for the ensemble", call. = FALSE)
-
-# Preserve the published-development workflow's two-step split, including the
-# shared boundary row between the second train/test split.
-data <- data[ceiling(nrow(data) / 2):nrow(data), , drop = FALSE]
-if (length(covariates) == 0L || trait_type == "binary") {
-  eta <- data[[phenotype_column]]
-} else {
-  formula <- as.formula(sprintf("%s ~ %s", phenotype_column, paste(covariates, collapse = " + ")))
-  eta <- summary(lm(formula, data = data))$residuals
-}
-
-predictor_columns <- setdiff(names(predictors), "IID")
-split_index <- ceiling(nrow(data) / 2)
-train_rows <- 1:split_index
-test_rows <- split_index:nrow(data)
-data_train <- data[train_rows, predictor_columns, drop = FALSE]
-data_test <- data[test_rows, predictor_columns, drop = FALSE]
-eta_train <- eta[train_rows]
-eta_test <- eta[test_rows]
-
-individual_metrics <- vapply(seq_along(predictor_columns), function(index) {
-  values <- as.numeric(data_test[[index]])
-  if (trait_type == "quantitative") {
-    cor(eta_test, values)^2
-  } else {
-    as.numeric(auc(suppressMessages(roc(data[[phenotype_column]][test_rows], values))))
+score_columns <- c("target_stage1_score", "calibrated_stage2_score")
+read_scores <- function(path, label) {
+  values <- fread(path)
+  expected <- c("IID", score_columns)
+  if (!identical(names(values), expected)) {
+    stop(
+      sprintf("%s score table must contain exactly: %s", label, paste(expected, collapse = ", ")),
+      call. = FALSE
+    )
   }
-}, numeric(1L))
+  if (anyDuplicated(values$IID)) {
+    stop(sprintf("%s score table contains duplicate IID values", label), call. = FALSE)
+  }
+  if (any(!is.finite(as.matrix(values[, ..score_columns])))) {
+    stop(sprintf("%s score table contains non-finite predictors", label), call. = FALSE)
+  }
+  values
+}
 
-best_index <- which.max(individual_metrics)
-best_metric <- individual_metrics[[best_index]]
-best_prediction <- as.numeric(data_test[[best_index]])
-prediction_source <- predictor_columns[[best_index]]
-superlearner_metric <- NA_real_
+validation_scores <- read_scores(validation_predictor_path, "Validation")
+test_scores <- read_scores(test_predictor_path, "Test")
+overlap <- intersect(validation_scores$IID, test_scores$IID)
+if (length(overlap)) {
+  stop(
+    sprintf("Validation and test IIDs must be disjoint; overlap includes %s", overlap[[1L]]),
+    call. = FALSE
+  )
+}
+
+validation_phenotype <- fread(validation_phenotype_path)
+required_validation <- c("IID", phenotype_column, covariates)
+missing_validation <- setdiff(required_validation, names(validation_phenotype))
+if (length(missing_validation)) {
+  stop(
+    sprintf("Validation phenotype is missing columns: %s", paste(missing_validation, collapse = ",")),
+    call. = FALSE
+  )
+}
+if (anyDuplicated(validation_phenotype$IID)) {
+  stop("Validation phenotype contains duplicate IID values", call. = FALSE)
+}
+
+validation_rows <- match(validation_scores$IID, validation_phenotype$IID)
+if (anyNA(validation_rows)) {
+  stop("Validation phenotype does not cover every scored validation IID", call. = FALSE)
+}
+validation <- as.data.frame(cbind(
+  validation_scores,
+  as.data.frame(validation_phenotype[validation_rows, ..required_validation][, IID := NULL])
+))
+if (!all(complete.cases(validation[, c(phenotype_column, covariates), drop = FALSE]))) {
+  stop("Validation phenotype or covariates contain missing values", call. = FALSE)
+}
+if (nrow(validation) < 10L) {
+  stop("At least ten complete target validation samples are required", call. = FALSE)
+}
+
+validation_x <- validation[, score_columns, drop = FALSE]
+validation_y <- validation[[phenotype_column]]
+covariate_model <- NULL
+if (trait_type == "quantitative" && length(covariates)) {
+  formula <- as.formula(
+    sprintf("%s ~ %s", phenotype_column, paste(covariates, collapse = " + "))
+  )
+  covariate_model <- lm(formula, data = validation)
+  validation_y <- residuals(covariate_model)
+}
 
 if (trait_type == "quantitative") {
-  model <- SuperLearner(
-    Y = eta_train,
-    X = data_train,
-    family = gaussian(),
-    SL.library = c("SL.glmnet", "SL.ridge")
-  )
-  superlearner_prediction <- as.numeric(predict(model, data_test, onlySL = TRUE)$pred)
-  superlearner_metric <- cor(eta_test, superlearner_prediction)^2
-  if (!is.na(superlearner_metric) && superlearner_metric >= best_metric) {
-    best_metric <- superlearner_metric
-    best_prediction <- superlearner_prediction
-    prediction_source <- "SuperLearner(SL.glmnet,SL.ridge)"
+  learner_library <- c("SL.lasso.HERCULES", "SL.ridge.HERCULES", "SL.nnet")
+  meta_method <- "method.NNLS"
+  family_object <- gaussian()
+} else if (trait_type == "binary") {
+  unique_y <- sort(unique(validation_y))
+  if (!all(unique_y %in% c(0, 1)) || length(unique_y) != 2L) {
+    stop("Binary validation phenotype must contain both 0 and 1", call. = FALSE)
   }
+  learner_library <- c("SL.lasso.HERCULES", "SL.nnet")
+  meta_method <- "method.AUC"
+  family_object <- binomial()
+} else {
+  stop("trait_type must be quantitative or binary", call. = FALSE)
 }
 
+model <- SuperLearner(
+  Y = validation_y,
+  X = validation_x,
+  family = family_object,
+  SL.library = learner_library,
+  method = meta_method
+)
+
+test_x <- as.data.frame(test_scores[, ..score_columns])
+test_prediction <- as.numeric(predict(model, newdata = test_x, onlySL = TRUE)$pred)
+if (trait_type == "binary") {
+  test_prediction <- pmin(1, pmax(0, test_prediction))
+}
+
+# SuperLearner records wall-clock timings in the fitted object. They are not
+# part of the fitted prediction function and make otherwise identical model
+# serializations differ across installations, so omit them from the portable
+# reproducible representation.
+model$times <- NULL
+
+model_bundle <- list(
+  superlearner = model,
+  learner_library = learner_library,
+  meta_method = meta_method,
+  trait_type = trait_type,
+  phenotype_column = phenotype_column,
+  covariates = covariates,
+  covariate_model = covariate_model,
+  seed = seed,
+  score_columns = score_columns
+)
+saveRDS(model_bundle, paste0(output_prefix, ".model.rds"))
+
 predictions <- data.frame(
-  IID = data[[phenotype_id]][test_rows],
-  observed = data[[phenotype_column]][test_rows],
-  prediction = best_prediction,
-  source = prediction_source,
+  IID = test_scores$IID,
+  prediction = test_prediction,
   stringsAsFactors = FALSE
 )
-metrics <- data.frame(
-  metric = if (trait_type == "quantitative") "R2" else "AUC",
-  value = best_metric,
-  selected_source = prediction_source,
-  superlearner_metric = superlearner_metric,
+
+metadata <- data.frame(
+  trait_type = trait_type,
+  learner_library = paste(learner_library, collapse = ","),
+  meta_method = meta_method,
   seed = seed,
   stringsAsFactors = FALSE
 )
+fwrite(metadata, paste0(output_prefix, ".model-metadata.tsv"), sep = "\t")
+
+if (nzchar(test_phenotype_path)) {
+  test_phenotype <- fread(test_phenotype_path)
+  required_test <- c("IID", phenotype_column, covariates)
+  missing_test <- setdiff(required_test, names(test_phenotype))
+  if (length(missing_test)) {
+    stop(
+      sprintf("Test phenotype is missing columns: %s", paste(missing_test, collapse = ",")),
+      call. = FALSE
+    )
+  }
+  if (anyDuplicated(test_phenotype$IID)) {
+    stop("Test phenotype contains duplicate IID values", call. = FALSE)
+  }
+
+  test_rows <- match(predictions$IID, test_phenotype$IID)
+  if (anyNA(test_rows)) {
+    stop("Test phenotype does not cover every scored test IID", call. = FALSE)
+  }
+  evaluated <- cbind(
+    predictions,
+    as.data.frame(test_phenotype[test_rows, ..required_test][, IID := NULL])
+  )
+  observed <- evaluated[[phenotype_column]]
+  if (trait_type == "quantitative" && !is.null(covariate_model)) {
+    observed <- observed - as.numeric(predict(covariate_model, newdata = evaluated))
+  }
+  predictions$observed <- observed
+
+  if (trait_type == "quantitative") {
+    metric_name <- "R2"
+    metric_value <- cor(observed, predictions$prediction)^2
+  } else {
+    metric_name <- "AUC"
+    metric_value <- as.numeric(
+      auc(suppressMessages(roc(observed, predictions$prediction, quiet = TRUE)))
+    )
+  }
+  metrics <- data.frame(
+    metric = metric_name,
+    value = metric_value,
+    seed = seed,
+    stringsAsFactors = FALSE
+  )
+  fwrite(metrics, paste0(output_prefix, ".metrics.tsv"), sep = "\t")
+}
 
 fwrite(predictions, paste0(output_prefix, ".predictions.tsv"), sep = "\t")
-fwrite(metrics, paste0(output_prefix, ".metrics.tsv"), sep = "\t")

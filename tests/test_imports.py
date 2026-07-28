@@ -4,16 +4,20 @@ from __future__ import annotations
 def test_public_import_is_lightweight() -> None:
     import hercules
 
-    assert hercules.__version__ == "1.0.1"
+    assert hercules.__version__ == "1.0.2"
     assert hercules.get_stage("m1").output_prefix == "HERCULES_M1"
 
 
 def test_public_scientific_components_resolve() -> None:
-    from hercules.inference import HerculesGridSearch, HerculesModel, vi_bayes_paper
+    from hercules.inference import (
+        HerculesGridSearch,
+        HerculesModel,
+        calibrate_directional,
+    )
 
     assert HerculesModel.__module__ == "hercules.core.model.HerculesModel"
     assert (
         HerculesGridSearch.__module__
         == "hercules.core.model.gridsearch.HerculesGridSearch"
     )
-    assert callable(vi_bayes_paper)
+    assert callable(calibrate_directional)

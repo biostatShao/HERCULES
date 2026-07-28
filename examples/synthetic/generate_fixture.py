@@ -31,7 +31,7 @@ def main() -> None:
 
     for ancestry, offset in (("base", 0), ("target", 1)):
         vcf = root / f"{ancestry}.vcf"
-        _write_vcf(vcf, ancestry=ancestry, offset=offset)
+        dosage_matrix = _write_vcf(vcf, ancestry=ancestry, offset=offset)
         prefix = root / "genotypes" / ancestry / ancestry
         prefix.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
@@ -47,7 +47,24 @@ def main() -> None:
             ],
             check=True,
         )
-        _write_validation_files(root, ancestry, offset)
+        _write_validation_files(root, ancestry, offset, dosage_matrix)
+        if ancestry == "target":
+            for cohort in ("validation", "test"):
+                cohort_prefix = root / "genotypes" / f"target_{cohort}" / f"target_{cohort}"
+                cohort_prefix.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    [
+                        args.plink,
+                        "--bfile",
+                        str(prefix),
+                        "--keep",
+                        str(root / f"target.stage3.{cohort}.keep"),
+                        "--make-bed",
+                        "--out",
+                        str(cohort_prefix),
+                    ],
+                    check=True,
+                )
         _write_sumstats(root, ancestry, offset)
 
         from magenpy.GWADataLoader import GWADataLoader
@@ -86,7 +103,7 @@ def _resolve_executable(value: str) -> str:
     raise FileNotFoundError(f"Executable not found: {value}")
 
 
-def _write_vcf(path: Path, *, ancestry: str, offset: int) -> None:
+def _write_vcf(path: Path, *, ancestry: str, offset: int) -> np.ndarray:
     samples = [f"{ancestry}_{index + 1:02d}" for index in range(SAMPLES)]
     rng = np.random.default_rng(7209 + offset)
     lines = [
@@ -96,11 +113,13 @@ def _write_vcf(path: Path, *, ancestry: str, offset: int) -> None:
         "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *samples]),
     ]
     genotype_codes = ("0/0", "0/1", "1/1")
+    dosage_matrix = np.empty((VARIANTS, SAMPLES), dtype=np.int8)
     for variant in range(VARIANTS):
         allele_frequency = 0.10 + 0.035 * (variant % 10) + 0.01 * offset
         dosage = rng.binomial(2, min(allele_frequency, 0.48), size=SAMPLES)
         if np.all(dosage == dosage[0]):
             dosage[0], dosage[1] = 0, 1
+        dosage_matrix[variant] = dosage
         genotypes = [genotype_codes[int(value)] for value in dosage]
         lines.append(
             "\t".join(
@@ -119,9 +138,23 @@ def _write_vcf(path: Path, *, ancestry: str, offset: int) -> None:
             )
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return dosage_matrix
 
 
-def _write_validation_files(root: Path, ancestry: str, offset: int) -> None:
+def _write_validation_files(
+    root: Path, ancestry: str, offset: int, dosage_matrix: np.ndarray
+) -> None:
+    weights = np.array(
+        [
+            ((-1.0) ** variant)
+            * (0.006 + 0.001 * (variant % 8) + 0.0005 * offset)
+            for variant in range(VARIANTS)
+        ]
+    )
+    raw_signal = dosage_matrix.T @ weights
+    genetic_signal = (raw_signal - raw_signal.mean()) / raw_signal.std(ddof=0)
+    binary_latent = genetic_signal + 0.25 * np.sin(np.arange(SAMPLES) / 3.0)
+    binary_threshold = float(np.median(binary_latent))
     rows = []
     quantitative_rows = []
     binary_rows = []
@@ -130,8 +163,14 @@ def _write_validation_files(root: Path, ancestry: str, offset: int) -> None:
         iid = f"{ancestry}_{index + 1:02d}"
         age = 35 + index
         sex = index % 2
-        quantitative = 0.15 * index + 0.7 * sex + 0.05 * offset
-        binary = int((index + offset) % 3 == 0)
+        quantitative = (
+            1.2 * genetic_signal[index]
+            + 0.02 * age
+            + 0.2 * sex
+            + 0.05 * offset
+            + 0.15 * math.sin(index / 3.0)
+        )
+        binary = int(binary_latent[index] > binary_threshold)
         rows.append((iid, quantitative, binary, age, sex))
         # PLINK 2 assigns FID=0 when importing the VCF sample IDs below.
         quantitative_rows.append(("0", iid, quantitative))
@@ -155,6 +194,36 @@ def _write_validation_files(root: Path, ancestry: str, offset: int) -> None:
     pd.DataFrame(keep_rows).to_csv(
         root / f"{ancestry}.validation.keep", sep="\t", index=False, header=False
     )
+    if ancestry == "target":
+        phenotype_table = pd.DataFrame(
+            rows, columns=["IID", "phenotype", "binary", "age", "sex"]
+        )
+        for cohort, indices in (
+            ("validation", range(0, SAMPLES // 2)),
+            ("test", range(SAMPLES // 2, SAMPLES)),
+        ):
+            selected = phenotype_table.iloc[list(indices)].copy()
+            selected.to_csv(
+                root / f"target.stage3.{cohort}.tsv", sep="\t", index=False
+            )
+            pd.DataFrame(
+                [("0", iid) for iid in selected["IID"]]
+            ).to_csv(
+                root / f"target.stage3.{cohort}.keep",
+                sep="\t",
+                index=False,
+                header=False,
+            )
+            if cohort == "validation":
+                for column, label in (("phenotype", "quantitative"), ("binary", "binary")):
+                    pd.DataFrame(
+                        [("0", row.IID, getattr(row, column)) for row in selected.itertuples()]
+                    ).to_csv(
+                        root / f"target.stage3.validation.{label}.pheno",
+                        sep="\t",
+                        index=False,
+                        header=False,
+                    )
 
 
 def _write_sumstats(root: Path, ancestry: str, offset: int) -> None:
@@ -235,10 +304,19 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
             },
             "genotype_prefixes": {
                 "base_validation": str(root / "genotypes" / "base" / "base"),
-                "target": str(root / "genotypes" / "target" / "target"),
             },
-            "validation_genotype": str(root / "genotypes" / "target" / "target"),
-            "phenotype_file": str(root / "target.phenotype.tsv"),
+            "validation_genotype": str(
+                root / "genotypes" / "target_validation" / "target_validation"
+            ),
+            "phenotype_file": "",
+            "target_validation_genotype": str(
+                root / "genotypes" / "target_validation" / "target_validation"
+            ),
+            "target_validation_phenotype": str(root / "target.stage3.validation.tsv"),
+            "target_test_genotype": str(
+                root / "genotypes" / "target_test" / "target_test"
+            ),
+            "target_test_phenotype": str(root / "target.stage3.test.tsv"),
             "phenotype_column": "phenotype",
             "covariates": ["age", "sex"],
             "trait_type": "quantitative",
@@ -252,8 +330,10 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
             "pi_steps": 10,
             "sigma_epsilon_steps": 10,
             "sumstats_format": "fastgwa",
-            "validation_keep": str(root / "target.validation.keep"),
-            "validation_phenotype": str(root / "target.validation.quantitative.pheno"),
+            "validation_keep": str(root / "target.stage3.validation.keep"),
+            "validation_phenotype": str(
+                root / "target.stage3.validation.quantitative.pheno"
+            ),
         },
         "m2": {
             "hyperparameter_search": "grid",
@@ -264,10 +344,17 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
             "validation_keep": str(root / "base.validation.keep"),
             "validation_phenotype": str(root / "base.validation.quantitative.pheno"),
         },
-        "m3": {"max_iter": 1000, "tol": 1e-6},
+        "m3": {
+            "model": "directional_pairwise_uniform_lambda",
+            "lambda_prior": "uniform_0_1",
+            "max_iter": 1000,
+            "tol": 1e-6,
+            "quadrature_points": 32,
+        },
         "ensemble": {
-            "quantitative_learners": ["SL.glmnet", "SL.ridge"],
-            "binary_selection": "best_individual_auc",
+            "quantitative_learners": ["lasso", "ridge", "neural_network"],
+            "binary_learners": ["lasso", "neural_network"],
+            "binary_method": "method.AUC",
         },
         "checkpoint": {"enabled": True, "resume": True},
         "logging": {"level": "INFO", "file": ""},
@@ -284,7 +371,7 @@ def _write_configs(root: Path, plink: str, plink2: str, rscript: str) -> None:
     binary["output_dir"] = str(root / "results" / "binary")
     binary["temporary_dir"] = str(root / "results" / "binary" / "tmp")
     binary["m1"]["validation_phenotype"] = str(
-        root / "target.validation.binary.pheno"
+        root / "target.stage3.validation.binary.pheno"
     )
     binary["m2"]["validation_phenotype"] = str(
         root / "base.validation.binary.pheno"

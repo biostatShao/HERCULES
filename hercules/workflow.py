@@ -15,13 +15,16 @@ import pandas as pd
 from . import __version__
 from .config import HerculesConfig
 from .exceptions import HerculesError
-from .m3 import integrate_posterior_tables
+from .m3 import M3_SCIENTIFIC_MODEL, integrate_posterior_tables
 from .manifest import RunManifest, checkpoint_matches, checkpoint_path, configuration_hash
 from .process import run_process
 from .resources import ensemble_script_path
 from .scoring import aggregate_score_files, run_plink2_score
 from .stages import STAGES, StageSpec, execution_order
 from .sumstats import prepare_fastgwa_sumstats
+
+
+STAGE3_SCIENTIFIC_MODEL = "two-score-validation-trained-superlearner-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +47,7 @@ def plan_workflow(config: HerculesConfig, target: str = "ensemble") -> WorkflowP
     stages = execution_order(target)
     return WorkflowPlan(
         trait=config.trait_name,
-        configuration_hash=configuration_hash(config.as_dict()),
+        configuration_hash=_configuration_hash(config),
         stages=stages,
         output_dir=Path(config.output_dir),
     )
@@ -112,15 +115,10 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
     )
     validation_phenotype = str(model_config.get("validation_phenotype", config.inputs.phenotype_file))
     validation_keep = str(model_config.get("validation_keep", ""))
-    target_genotype = config.inputs.genotype_prefixes.get(
-        "target", config.inputs.validation_genotype
-    )
-    if not target_genotype:
-        raise HerculesError("inputs.genotype_prefixes.target is required for PRS scoring")
-
-    config_hash = configuration_hash(config.as_dict())
-    selected_scores: list[Path] = []
-    grid_scores: list[Path] = []
+    config_hash = _configuration_hash(config)
+    selected_posteriors: list[Path] = []
+    hyperparameter_tables: list[Path] = []
+    selection_tables: list[Path] = []
     for chromosome in config.chromosomes:
         marker = checkpoint_path(
             config.output_dir,
@@ -129,19 +127,15 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
             chromosome=chromosome,
         )
         stage_prefix = Path(config.temporary_dir) / f"{stage.output_prefix}.{chromosome}"
-        posterior_grid = Path(f"{stage_prefix}.beta.gz")
         selected_posterior = Path(f"{stage_prefix}.fit.gz")
-        selected_score_prefix = Path(config.temporary_dir) / f"{stage.output_prefix}.selected.{chromosome}"
-        grid_score_prefix = Path(config.temporary_dir) / f"{stage.output_prefix}.grid.{chromosome}"
-        selected_score = Path(f"{selected_score_prefix}.sscore")
-        grid_score = Path(f"{grid_score_prefix}.sscore")
+        hyperparameters = Path(f"{stage_prefix}.hyp")
+        selection = Path(f"{stage_prefix}.validation")
 
         complete = (
             checkpoint_matches(marker, config_hash)
-            and posterior_grid.is_file()
             and selected_posterior.is_file()
-            and selected_score.is_file()
-            and grid_score.is_file()
+            and hyperparameters.is_file()
+            and selection.is_file()
         )
         if not (config.checkpoint.enabled and config.checkpoint.resume and complete):
             sumstats_format = str(model_config.get("sumstats_format", "fastgwa")).lower()
@@ -185,6 +179,8 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
                 config.temporary_dir,
                 "--grid-metric",
                 str(model_config.get("grid_metric", "validation")),
+                "--validation-metric",
+                "auc" if config.inputs.trait_type == "binary" else "r2",
                 "--max-iter",
                 str(model_config.get("max_iter", 500)),
                 "--threads",
@@ -205,49 +201,36 @@ def _run_inference_stage(config: HerculesConfig, stage_id: str) -> None:
             result = run_process(command, env=_scientific_subprocess_environment(config))
             Path(f"{stage_prefix}.runner.stdout.log").write_text(result.stdout, encoding="utf-8")
             Path(f"{stage_prefix}.runner.stderr.log").write_text(result.stderr, encoding="utf-8")
-            if not posterior_grid.is_file() or not selected_posterior.is_file():
+            if not selected_posterior.is_file() or not hyperparameters.is_file() or not selection.is_file():
                 raise HerculesError(
                     f"{stage.display_name} did not produce expected posterior files for chromosome "
-                    f"{chromosome}: {posterior_grid}, {selected_posterior}"
+                    f"{chromosome}: {selected_posterior}, {hyperparameters}, {selection}"
                 )
-
-            genotype = _format_path(target_genotype, chromosome=chromosome, ancestry=config.target_ancestry)
-            grid_score = run_plink2_score(
-                plink2=config.tools.plink2,
-                genotype_prefix=genotype,
-                score_file=posterior_grid,
-                output_prefix=grid_score_prefix,
-                grid=True,
-            )
-            selected_score = run_plink2_score(
-                plink2=config.tools.plink2,
-                genotype_prefix=genotype,
-                score_file=selected_posterior,
-                output_prefix=selected_score_prefix,
-                grid=False,
-            )
             _write_checkpoint(marker, config_hash, stage_id, chromosome)
 
-        selected_scores.append(selected_score)
-        grid_scores.append(grid_score)
+        selected_posteriors.append(selected_posterior)
+        hyperparameter_tables.append(hyperparameters)
+        selection_tables.append(selection)
 
-    aggregate_score_files(
-        selected_scores,
-        Path(config.output_dir) / f"{stage.output_prefix}.scores.tsv",
+    _concatenate_tables(
+        selected_posteriors,
+        Path(config.output_dir) / f"{stage.output_prefix}.selected-posterior.tsv.gz",
     )
-    aggregate_score_files(
-        grid_scores,
-        Path(config.output_dir) / f"{stage.output_prefix}.grid-scores.tsv",
+    _concatenate_tables(
+        hyperparameter_tables,
+        Path(config.output_dir) / f"{stage.output_prefix}.selected-hyperparameters.tsv",
+    )
+    _concatenate_tables(
+        selection_tables,
+        Path(config.output_dir) / f"{stage.output_prefix}.selection-metrics.tsv",
     )
 
 
 def _run_m3(config: HerculesConfig) -> None:
     stage = STAGES["m3"]
-    config_hash = configuration_hash(config.as_dict())
-    grid_scores: list[Path] = []
-    target_genotype = config.inputs.genotype_prefixes.get(
-        "target", config.inputs.validation_genotype
-    )
+    config_hash = _configuration_hash(config)
+    posterior_paths: list[Path] = []
+    diagnostic_paths: list[Path] = []
     for chromosome in config.chromosomes:
         marker = checkpoint_path(
             config.output_dir,
@@ -255,12 +238,15 @@ def _run_m3(config: HerculesConfig) -> None:
             trait=config.trait_name,
             chromosome=chromosome,
         )
-        m1 = Path(config.temporary_dir) / f"{STAGES['m1'].output_prefix}.{chromosome}.beta.gz"
-        m2 = Path(config.temporary_dir) / f"{STAGES['m2'].output_prefix}.{chromosome}.beta.gz"
-        m3 = Path(config.temporary_dir) / f"{stage.output_prefix}.{chromosome}.fit.tsv"
-        score_prefix = Path(config.temporary_dir) / f"{stage.output_prefix}.grid.{chromosome}"
-        score_path = Path(f"{score_prefix}.sscore")
-        complete = checkpoint_matches(marker, config_hash) and m3.is_file() and score_path.is_file()
+        m1 = Path(config.temporary_dir) / f"{STAGES['m1'].output_prefix}.{chromosome}.fit.gz"
+        m2 = Path(config.temporary_dir) / f"{STAGES['m2'].output_prefix}.{chromosome}.fit.gz"
+        m3 = Path(config.temporary_dir) / f"{stage.output_prefix}.{chromosome}.posterior.tsv"
+        diagnostics = Path(config.temporary_dir) / f"{stage.output_prefix}.{chromosome}.diagnostics.tsv"
+        complete = (
+            checkpoint_matches(marker, config_hash)
+            and m3.is_file()
+            and diagnostics.is_file()
+        )
         if not (config.checkpoint.enabled and config.checkpoint.resume and complete):
             if not m1.is_file() or not m2.is_file():
                 raise HerculesError(f"M3 requires M1/M2 posterior files: {m1}, {m2}")
@@ -268,32 +254,28 @@ def _run_m3(config: HerculesConfig) -> None:
                 m1,
                 m2,
                 m3,
+                diagnostics_path=diagnostics,
                 max_iter=int(config.m3.get("max_iter", 1000)),
                 tol=float(config.m3.get("tol", 1e-6)),
-            )
-            score_path = run_plink2_score(
-                plink2=config.tools.plink2,
-                genotype_prefix=_format_path(
-                    target_genotype,
-                    chromosome=chromosome,
-                    ancestry=config.target_ancestry,
-                ),
-                score_file=m3,
-                output_prefix=score_prefix,
-                grid=True,
+                quadrature_points=int(config.m3.get("quadrature_points", 32)),
             )
             _write_checkpoint(marker, config_hash, "m3", chromosome)
-        grid_scores.append(score_path)
+        posterior_paths.append(m3)
+        diagnostic_paths.append(diagnostics)
 
-    aggregate_score_files(
-        grid_scores,
-        Path(config.output_dir) / f"{stage.output_prefix}.scores.tsv",
+    _concatenate_tables(
+        posterior_paths,
+        Path(config.output_dir) / f"{stage.output_prefix}.calibrated-posterior.tsv.gz",
+    )
+    _concatenate_tables(
+        diagnostic_paths,
+        Path(config.output_dir) / f"{stage.output_prefix}.convergence-diagnostics.tsv",
     )
 
 
 def _run_ensemble(config: HerculesConfig) -> None:
     stage = STAGES["ensemble"]
-    config_hash = configuration_hash(config.as_dict())
+    config_hash = _configuration_hash(config)
     marker = checkpoint_path(
         config.output_dir,
         stage=stage,
@@ -303,44 +285,41 @@ def _run_ensemble(config: HerculesConfig) -> None:
     output_prefix = Path(config.output_dir) / stage.output_prefix
     predictions = Path(f"{output_prefix}.predictions.tsv")
     metrics = Path(f"{output_prefix}.metrics.tsv")
+    model_path = Path(f"{output_prefix}.model.rds")
     if (
         config.checkpoint.enabled
         and config.checkpoint.resume
         and checkpoint_matches(marker, config_hash)
         and predictions.is_file()
-        and metrics.is_file()
+        and model_path.is_file()
+        and (not config.inputs.target_test_phenotype or metrics.is_file())
     ):
         return
 
-    sources = [
-        ("M1_selected", Path(config.output_dir) / "HERCULES_M1.scores.tsv"),
-        ("M2_selected", Path(config.output_dir) / "HERCULES_M2.scores.tsv"),
-        ("M3", Path(config.output_dir) / "HERCULES_M3.scores.tsv"),
-        ("M1_grid", Path(config.output_dir) / "HERCULES_M1.grid-scores.tsv"),
-        ("M2_grid", Path(config.output_dir) / "HERCULES_M2.grid-scores.tsv"),
-    ]
-    combined: pd.DataFrame | None = None
-    for label, path in sources:
-        if not path.is_file():
-            raise HerculesError(f"Ensemble input is missing: {path}")
-        table = pd.read_csv(path, sep="\t")
-        renamed = table.rename(
-            columns={column: f"{label}_{column}" for column in table.columns if column != "IID"}
-        )
-        if combined is None:
-            combined = renamed
-        else:
-            combined = combined.merge(renamed, on="IID", how="inner", sort=False)
-    assert combined is not None
-    predictor_path = Path(config.output_dir) / f"{stage.output_prefix}.inputs.tsv"
-    combined.to_csv(predictor_path, sep="\t", index=False)
+    validation_predictors = _build_stage3_score_matrix(
+        config,
+        cohort="validation",
+        genotype=config.inputs.target_validation_genotype,
+    )
+    test_predictors = _build_stage3_score_matrix(
+        config,
+        cohort="test",
+        genotype=config.inputs.target_test_genotype,
+    )
+    _ensure_disjoint_iids(validation_predictors, test_predictors)
+    validation_path = Path(config.output_dir) / f"{stage.output_prefix}.validation-scores.tsv"
+    test_path = Path(config.output_dir) / f"{stage.output_prefix}.test-scores.tsv"
+    validation_predictors.to_csv(validation_path, sep="\t", index=False)
+    test_predictors.to_csv(test_path, sep="\t", index=False)
 
     result = run_process(
         [
             config.tools.rscript,
             ensemble_script_path(),
-            predictor_path,
-            config.inputs.phenotype_file,
+            validation_path,
+            config.inputs.target_validation_phenotype,
+            test_path,
+            config.inputs.target_test_phenotype,
             config.inputs.phenotype_column,
             ",".join(config.inputs.covariates),
             config.inputs.trait_type,
@@ -350,9 +329,142 @@ def _run_ensemble(config: HerculesConfig) -> None:
     )
     Path(f"{output_prefix}.stdout.log").write_text(result.stdout, encoding="utf-8")
     Path(f"{output_prefix}.stderr.log").write_text(result.stderr, encoding="utf-8")
-    if not predictions.is_file() or not metrics.is_file():
-        raise HerculesError("The R ensemble completed without producing predictions and metrics")
+    if not predictions.is_file() or not model_path.is_file():
+        raise HerculesError("Stage 3 completed without producing predictions and a fitted model")
+    if config.inputs.target_test_phenotype and not metrics.is_file():
+        raise HerculesError("Stage 3 completed without producing the requested test metric")
     _write_checkpoint(marker, config_hash, "ensemble", None)
+
+
+def _build_stage3_score_matrix(
+    config: HerculesConfig,
+    *,
+    cohort: str,
+    genotype: str,
+) -> pd.DataFrame:
+    """Score the two manuscript predictors in one target-population cohort."""
+
+    target_scores: list[Path] = []
+    calibrated_scores: list[Path] = []
+    for chromosome in config.chromosomes:
+        genotype_prefix = _format_path(
+            genotype,
+            chromosome=chromosome,
+            ancestry=config.target_ancestry,
+        )
+        target_posterior = (
+            Path(config.temporary_dir)
+            / f"{STAGES['m1'].output_prefix}.{chromosome}.fit.gz"
+        )
+        calibrated_posterior = (
+            Path(config.temporary_dir)
+            / f"{STAGES['m3'].output_prefix}.{chromosome}.posterior.tsv"
+        )
+        for label, posterior, collector in (
+            ("target_stage1", target_posterior, target_scores),
+            ("calibrated_stage2", calibrated_posterior, calibrated_scores),
+        ):
+            if not posterior.is_file():
+                raise HerculesError(f"Stage 3 scoring posterior is missing: {posterior}")
+            collector.append(
+                run_plink2_score(
+                    plink2=config.tools.plink2,
+                    genotype_prefix=genotype_prefix,
+                    score_file=posterior,
+                    output_prefix=(
+                        Path(config.temporary_dir)
+                        / f"HERCULES_stage3.{cohort}.{label}.{chromosome}"
+                    ),
+                    grid=False,
+                )
+            )
+
+    target = _aggregate_single_score(
+        target_scores,
+        Path(config.temporary_dir) / f"HERCULES_stage3.{cohort}.target.tsv",
+        "target_stage1_score",
+    )
+    calibrated = _aggregate_single_score(
+        calibrated_scores,
+        Path(config.temporary_dir) / f"HERCULES_stage3.{cohort}.calibrated.tsv",
+        "calibrated_stage2_score",
+    )
+    target_iids = set(target["IID"])
+    calibrated_iids = set(calibrated["IID"])
+    if target_iids != calibrated_iids:
+        target_only = sorted(str(value) for value in target_iids - calibrated_iids)
+        calibrated_only = sorted(str(value) for value in calibrated_iids - target_iids)
+        raise HerculesError(
+            f"Stage 3 {cohort} target/calibrated score sample sets differ; "
+            f"target_only={len(target_only)}"
+            f"{f' (example {target_only[0]})' if target_only else ''}, "
+            f"calibrated_only={len(calibrated_only)}"
+            f"{f' (example {calibrated_only[0]})' if calibrated_only else ''}"
+        )
+    combined = target.merge(
+        calibrated,
+        on="IID",
+        how="inner",
+        sort=False,
+        validate="one_to_one",
+    )
+    if combined.empty:
+        raise HerculesError(f"Stage 3 {cohort} score intersection is empty")
+    return combined.loc[
+        :, ["IID", "target_stage1_score", "calibrated_stage2_score"]
+    ]
+
+
+def _aggregate_single_score(
+    paths: list[Path],
+    intermediate_path: Path,
+    output_column: str,
+) -> pd.DataFrame:
+    aggregate_score_files(paths, intermediate_path)
+    table = pd.read_csv(intermediate_path, sep="\t")
+    score_columns = [column for column in table.columns if column != "IID"]
+    if len(score_columns) != 1:
+        raise HerculesError(
+            f"Expected exactly one score column for {output_column}; found {score_columns}"
+        )
+    return table.rename(columns={score_columns[0]: output_column})
+
+
+def _ensure_disjoint_iids(
+    validation_predictors: pd.DataFrame,
+    test_predictors: pd.DataFrame,
+) -> None:
+    overlap = set(validation_predictors["IID"]).intersection(test_predictors["IID"])
+    if overlap:
+        example = sorted(str(value) for value in overlap)[0]
+        raise HerculesError(
+            "Target validation and test samples must be disjoint; "
+            f"overlapping IID detected: {example}"
+        )
+
+
+def _concatenate_tables(paths: list[Path], output_path: Path) -> Path:
+    if not paths:
+        raise HerculesError(f"No tables were provided for {output_path}")
+    tables = [pd.read_csv(path, sep="\t") for path in paths]
+    expected = list(tables[0].columns)
+    for path, table in zip(paths[1:], tables[1:]):
+        if list(table.columns) != expected:
+            raise HerculesError(f"Table schemas differ while creating {output_path}: {path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.concat(tables, ignore_index=True).to_csv(output_path, sep="\t", index=False)
+    return output_path
+
+
+def _configuration_hash(config: HerculesConfig) -> str:
+    return configuration_hash(
+        {
+            "package_version": __version__,
+            "stage2_scientific_model": M3_SCIENTIFIC_MODEL,
+            "stage3_scientific_model": STAGE3_SCIENTIFIC_MODEL,
+            "configuration": config.as_dict(),
+        }
+    )
 
 
 def _format_path(value: str, *, chromosome: str, ancestry: str) -> str:
@@ -417,6 +529,9 @@ def _write_checkpoint(path: Path, config_hash: str, stage_id: str, chromosome: s
                 "configuration_hash": config_hash,
                 "stage": stage_id,
                 "chromosome": chromosome,
+                "package_version": __version__,
+                "stage2_scientific_model": M3_SCIENTIFIC_MODEL,
+                "stage3_scientific_model": STAGE3_SCIENTIFIC_MODEL,
             },
             indent=2,
         )

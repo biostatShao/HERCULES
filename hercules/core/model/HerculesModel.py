@@ -12,6 +12,22 @@ from ..utils.compute_utils import dict_mean, dict_sum, dict_concat
 from magenpy.utils.compute_utils import is_numeric
 
 
+def posterior_moments(gamma, mu, slab_variance):
+    """Return the spike-and-slab marginal posterior mean and variance.
+
+    ``gamma`` is the posterior inclusion probability, ``mu`` is the
+    conditional slab mean, and ``slab_variance`` is the conditional slab
+    variance. The variance is marginal over the spike and slab components.
+    """
+
+    gamma = np.asarray(gamma)
+    mu = np.asarray(mu)
+    slab_variance = np.asarray(slab_variance)
+    mean = gamma * mu
+    second_moment = gamma * (slab_variance + np.square(mu))
+    return mean, second_moment - np.square(mean)
+
+
 class HerculesModel(BayesPRSModel):
     """
     The base class for performing Variational Inference of Polygenic Risk Scores (HerculesModel).
@@ -906,8 +922,16 @@ class HerculesModel(BayesPRSModel):
         """
 
         self.pip = {c: pip.copy() for c, pip in self.compute_pip().items()}
-        self.post_mean_beta = {c: eta.copy() for c, eta in self.eta.items()}
-        self.post_var_beta = {c: zeta - self.eta[c]**2 for c, zeta in self.zeta.items()}
+        self.post_mean_beta = {}
+        self.post_var_beta = {}
+        for chromosome in self.var_gamma:
+            mean, variance = posterior_moments(
+                self.var_gamma[chromosome],
+                self.var_mu[chromosome],
+                1.0 / self.var_tau[chromosome],
+            )
+            self.post_mean_beta[chromosome] = mean.copy()
+            self.post_var_beta[chromosome] = variance.copy()
 
     def fit(self,
             max_iter=1000,

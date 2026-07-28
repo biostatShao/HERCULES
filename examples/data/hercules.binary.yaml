@@ -16,9 +16,12 @@ inputs:
     target: examples/data/ld/target/chr_22
   genotype_prefixes:
     base_validation: examples/data/genotypes/base/base
-    target: examples/data/genotypes/target/target
-  validation_genotype: examples/data/genotypes/target/target
-  phenotype_file: examples/data/target.phenotype.tsv
+  validation_genotype: examples/data/genotypes/target_validation/target_validation
+  phenotype_file: ""
+  target_validation_genotype: examples/data/genotypes/target_validation/target_validation
+  target_validation_phenotype: examples/data/target.stage3.validation.tsv
+  target_test_genotype: examples/data/genotypes/target_test/target_test
+  target_test_phenotype: examples/data/target.stage3.test.tsv
   phenotype_column: binary
   covariates: []
   trait_type: binary
@@ -41,8 +44,8 @@ m1:
   pi_steps: 10
   sigma_epsilon_steps: 10
   sumstats_format: fastgwa
-  validation_keep: examples/data/target.validation.keep
-  validation_phenotype: examples/data/target.validation.binary.pheno
+  validation_keep: examples/data/target.stage3.validation.keep
+  validation_phenotype: examples/data/target.stage3.validation.binary.pheno
 m2:
   hyperparameter_search: grid
   pi_steps: 10
@@ -52,11 +55,15 @@ m2:
   validation_keep: examples/data/base.validation.keep
   validation_phenotype: examples/data/base.validation.binary.pheno
 m3:
+  model: directional_pairwise_uniform_lambda
+  lambda_prior: uniform_0_1
   max_iter: 1000
   tol: 1.0e-6
+  quadrature_points: 32
 ensemble:
-  quantitative_learners: [SL.glmnet, SL.ridge]
-  binary_selection: best_individual_auc
+  quantitative_learners: [lasso, ridge, neural_network]
+  binary_learners: [lasso, neural_network]
+  binary_method: method.AUC
 checkpoint:
   enabled: true
   resume: true

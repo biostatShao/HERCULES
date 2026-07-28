@@ -8,7 +8,8 @@ This directory contains a deterministic, public smoke-test fixture:
 - PLINK genotype files;
 - windowed LD stores;
 - summary statistics;
-- quantitative and binary validation phenotypes;
+- separate target validation/test genotypes and phenotypes;
+- ancestry-matched quantitative and binary Stage-1 validation phenotypes;
 - functional annotations and per-SNP values;
 - ready-to-run quantitative and binary YAML configurations.
 
@@ -19,6 +20,12 @@ target file and M2 uses the base file independently.
 HERCULES converts these values to the initial precision
 `tau_beta_j = 1/var_prior_j`. The EM M-step subsequently updates `tau_beta`;
 the input values are not fixed throughout fitting.
+
+M3 reads only the selected target/base posterior means and marginal variances,
+then produces one directional calibrated target effect vector. The final
+learner is fitted on the target validation cohort with exactly the target
+Stage-1 and calibrated Stage-2 scores and applied to the disjoint target test
+cohort.
 
 The fixture contains no private or real participant data. Run commands from the
 repository root so that the relative paths in the YAML files resolve correctly.

@@ -33,7 +33,9 @@ def build_parser(*, program: str = "hercules") -> argparse.ArgumentParser:
     )
     validate.set_defaults(handler=_validate)
 
-    run = subparsers.add_parser("run", help="run the dependency-safe full workflow")
+    run = subparsers.add_parser(
+        "run", help="run M1, M2, directional M3, and the two-score Stage-3 learner"
+    )
     _add_execution_arguments(run)
     run.set_defaults(handler=_run, target="ensemble")
 
@@ -44,7 +46,9 @@ def build_parser(*, program: str = "hercules") -> argparse.ArgumentParser:
         _add_execution_arguments(stage_parser)
         stage_parser.set_defaults(handler=_run, target=stage_name)
 
-    ensemble = subparsers.add_parser("ensemble", help="run the validated ensemble procedure")
+    ensemble = subparsers.add_parser(
+        "ensemble", help="fit the two-score learner on validation data and predict test data"
+    )
     _add_execution_arguments(ensemble)
     ensemble.set_defaults(handler=_run, target="ensemble")
     return parser

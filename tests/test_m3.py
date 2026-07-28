@@ -1,67 +1,307 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.integrate import quad
 
-from hercules.m3 import integrate_posterior_tables, vi_bayes_paper
-
-
-def test_vi_bayes_paper_is_deterministic_and_finite() -> None:
-    mu_target = np.array([0.02, -0.01, 0.005, 0.03])
-    variance_target = np.array([0.001, 0.002, 0.0015, 0.003])
-    mu_base = np.array([0.015, -0.006, 0.008, 0.025])
-    variance_base = np.array([0.0012, 0.0018, 0.0011, 0.0028])
-    first = vi_bayes_paper(mu_target, variance_target, mu_base, variance_base, max_iter=1000)
-    second = vi_bayes_paper(mu_target, variance_target, mu_base, variance_base, max_iter=1000)
-    np.testing.assert_array_equal(first.beta_target, second.beta_target)
-    assert np.isfinite(first.beta_target).all()
-    assert np.isfinite(first.tau_squared)
+import hercules.m3 as m3
+from hercules.m3 import (
+    LAMBDA_PRIOR,
+    M3Result,
+    calibrate_directional,
+    integrate_posterior_tables,
+)
 
 
-def test_integrate_posterior_tables_preserves_100_candidate_contract(tmp_path: Path) -> None:
-    keys = pd.DataFrame(
+def _scalar_reference(
+    target_beta: float,
+    target_variance: float,
+    base_beta: float,
+    base_variance: float,
+    *,
+    max_iter: int = 1000,
+    tol: float = 1e-10,
+) -> tuple[float, float, float]:
+    mean = target_beta
+    variance = target_variance
+    previous = -np.inf
+    lambda_mean = 0.5
+
+    for _ in range(max_iter):
+        second_moment = variance + mean**2
+
+        def log_kernel(value: float) -> float:
+            return (
+                -np.log(value)
+                - 0.5
+                / base_variance
+                * (
+                    second_moment / value**2
+                    - 2.0 * base_beta * mean / value
+                    + base_beta**2
+                )
+            )
+
+        grid = np.linspace(1e-5, 1.0, 10001)
+        shift = float(
+            np.max(
+                -np.log(grid)
+                - 0.5
+                / base_variance
+                * (
+                    second_moment / grid**2
+                    - 2.0 * base_beta * mean / grid
+                    + base_beta**2
+                )
+            )
+        )
+
+        def scaled(value: float) -> float:
+            return np.exp(log_kernel(value) - shift)
+
+        normalizer = quad(scaled, 0.0, 1.0, epsabs=1e-12, limit=300)[0]
+        inverse = (
+            quad(lambda value: scaled(value) / value, 0.0, 1.0, epsabs=1e-12, limit=300)[0]
+            / normalizer
+        )
+        inverse_squared = (
+            quad(lambda value: scaled(value) / value**2, 0.0, 1.0, epsabs=1e-12, limit=300)[0]
+            / normalizer
+        )
+        lambda_mean = (
+            quad(lambda value: scaled(value) * value, 0.0, 1.0, epsabs=1e-12, limit=300)[0]
+            / normalizer
+        )
+        precision = 1.0 / target_variance + inverse_squared / base_variance
+        new_variance = 1.0 / precision
+        new_mean = new_variance * (
+            target_beta / target_variance + base_beta * inverse / base_variance
+        )
+        change = max(abs(new_mean - mean), abs(new_variance - variance))
+        mean, variance = new_mean, new_variance
+        if change <= tol and abs(change - previous) <= tol:
+            break
+        previous = change
+
+    return mean, variance, lambda_mean
+
+
+def _posterior(beta: list[float], variance: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
         {
-            "CHR": [1, 1],
-            "SNP": ["rs2", "rs1"],
-            "POS": [20, 10],
-            "A1": ["A", "C"],
-            "A2": ["G", "T"],
+            "CHR": [22] * len(beta),
+            "SNP": [f"rs{index + 1}" for index in range(len(beta))],
+            "POS": [100 * (index + 1) for index in range(len(beta))],
+            "A1": ["A"] * len(beta),
+            "A2": ["G"] * len(beta),
+            "BETA": beta,
+            "VAR_BETA": variance,
         }
     )
-    m1 = pd.concat(
-        [
-            keys,
-            pd.DataFrame({f"BETA_{index}": [0.001 * (index + 1)] * 2 for index in range(100)}),
-            pd.DataFrame({f"VAR_BETA_{index}": [0.01] * 2 for index in range(100)}),
-        ],
-        axis=1,
+
+
+def test_single_snp_matches_independent_quadrature_reference() -> None:
+    expected = _scalar_reference(0.08, 0.03, 0.12, 0.05)
+    result = calibrate_directional(
+        np.array([0.08]),
+        np.array([0.03]),
+        np.array([0.12]),
+        np.array([0.05]),
+        max_iter=1000,
+        tol=1e-10,
+        quadrature_points=96,
     )
-    m2 = pd.concat(
-        [
-            keys,
-            pd.DataFrame({f"BETA_{index}": [0.0015 * (index + 1)] * 2 for index in range(100)}),
-            pd.DataFrame({f"VAR_BETA_{index}": [0.012] * 2 for index in range(100)}),
-        ],
-        axis=1,
+
+    np.testing.assert_allclose(result.beta[0], expected[0], rtol=2e-5, atol=2e-7)
+    np.testing.assert_allclose(result.variance[0], expected[1], rtol=2e-5, atol=2e-7)
+    np.testing.assert_allclose(result.lambda_mean[0], expected[2], rtol=2e-5, atol=2e-7)
+
+
+def test_multi_snp_result_is_finite_deterministic_and_converged() -> None:
+    args = (
+        np.array([0.05, -0.02, 0.11]),
+        np.array([0.02, 0.03, 0.04]),
+        np.array([0.08, 0.01, -0.04]),
+        np.array([0.05, 0.06, 0.07]),
     )
-    m1_path = tmp_path / "m1.tsv"
-    m2_path = tmp_path / "m2.tsv"
+    first = calibrate_directional(*args, max_iter=1000, tol=1e-8)
+    second = calibrate_directional(*args, max_iter=1000, tol=1e-8)
+
+    for name in ("beta", "variance", "lambda_mean", "elbo"):
+        np.testing.assert_array_equal(getattr(first, name), getattr(second, name))
+        assert np.isfinite(getattr(first, name)).all()
+    assert first.converged.all()
+    assert np.all((first.lambda_mean >= 0.0) & (first.lambda_mean <= 1.0))
+    assert np.all(first.iterations > 0)
+
+
+def test_model_is_directional() -> None:
+    target_beta = np.array([0.03, -0.07])
+    target_variance = np.array([0.02, 0.04])
+    base_beta = np.array([0.15, 0.02])
+    base_variance = np.array([0.08, 0.03])
+
+    forward = calibrate_directional(
+        target_beta, target_variance, base_beta, base_variance
+    )
+    reverse = calibrate_directional(
+        base_beta, base_variance, target_beta, target_variance
+    )
+
+    assert not np.allclose(forward.beta, reverse.beta)
+
+
+def test_uniform_prior_is_fixed_scientific_constant() -> None:
+    assert LAMBDA_PRIOR == "Uniform(0,1)"
+
+
+def test_selected_tables_are_accepted_without_grid_columns(tmp_path: Path) -> None:
+    target = _posterior([0.01, 0.02], [0.03, 0.04])
+    base = _posterior([0.015, -0.01], [0.05, 0.06])
+    target_path = tmp_path / "target.fit.gz"
+    base_path = tmp_path / "base.fit.gz"
     output = tmp_path / "m3.tsv"
-    m1.to_csv(m1_path, sep="\t", index=False)
-    m2.to_csv(m2_path, sep="\t", index=False)
-    integrate_posterior_tables(m1_path, m2_path, output)
-    result = pd.read_csv(output, sep="\t")
-    assert list(result.columns[:5]) == ["CHR", "SNP", "POS", "A1", "A2"]
-    assert list(result["SNP"]) == ["rs1", "rs2"]
-    assert [column for column in result if column.startswith("BETA_")] == [
-        f"BETA_{index}" for index in range(100)
+    diagnostics = tmp_path / "diagnostics.tsv"
+    target.to_csv(target_path, sep="\t", index=False)
+    base.to_csv(base_path, sep="\t", index=False)
+
+    integrate_posterior_tables(
+        target_path, base_path, output, diagnostics_path=diagnostics
+    )
+
+    posterior = pd.read_csv(output, sep="\t")
+    diagnostic_table = pd.read_csv(diagnostics, sep="\t")
+    assert list(posterior.columns) == [
+        "CHR", "SNP", "POS", "A1", "A2", "BETA", "VAR_BETA"
+    ]
+    assert list(diagnostic_table.columns) == [
+        "CHR", "SNP", "POS", "A1", "A2",
+        "LAMBDA_MEAN", "CONVERGED", "ITERATIONS", "ELBO",
     ]
 
 
-def test_vi_bayes_paper_rejects_zero_variance_inputs() -> None:
-    values = np.array([0.01, 0.02])
-    with pytest.raises(ValueError, match="strictly positive"):
-        vi_bayes_paper(values, np.array([0.0, 0.01]), values, np.array([0.01, 0.01]))
+def test_var_beta_is_passed_as_variance_without_squaring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _posterior([0.01], [0.2])
+    base = _posterior([0.02], [0.3])
+    target_path = tmp_path / "target.tsv"
+    base_path = tmp_path / "base.tsv"
+    target.to_csv(target_path, sep="\t", index=False)
+    base.to_csv(base_path, sep="\t", index=False)
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_calibration(target_beta, target_variance, base_beta, base_variance, **kwargs):
+        captured["target"] = np.asarray(target_variance)
+        captured["base"] = np.asarray(base_variance)
+        return M3Result(
+            beta=np.asarray(target_beta),
+            variance=np.asarray(target_variance),
+            lambda_mean=np.array([0.5]),
+            converged=np.array([True]),
+            iterations=np.array([1]),
+            elbo=np.array([0.0]),
+        )
+
+    monkeypatch.setattr(m3, "calibrate_directional", fake_calibration)
+    integrate_posterior_tables(target_path, base_path, tmp_path / "output.tsv")
+
+    np.testing.assert_array_equal(captured["target"], [0.2])
+    np.testing.assert_array_equal(captured["base"], [0.3])
+
+
+def test_output_changes_when_only_base_effect_changes() -> None:
+    target_beta = np.array([0.05])
+    target_variance = np.array([0.02])
+    first = calibrate_directional(
+        target_beta, target_variance, np.array([0.01]), np.array([0.04])
+    )
+    second = calibrate_directional(
+        target_beta, target_variance, np.array([0.3]), np.array([0.04])
+    )
+    assert not np.isclose(first.beta[0], second.beta[0])
+
+
+def test_pairwise_api_does_not_accept_an_additional_donor(tmp_path: Path) -> None:
+    parameters = inspect.signature(integrate_posterior_tables).parameters
+    positional = [
+        parameter
+        for parameter in parameters.values()
+        if parameter.kind in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }
+    ]
+    assert [parameter.name for parameter in positional] == [
+        "target_path", "base_path", "output_path"
+    ]
+
+
+def test_unconverged_m3_is_not_written_as_a_successful_posterior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_path = tmp_path / "target.tsv"
+    base_path = tmp_path / "base.tsv"
+    output_path = tmp_path / "output.tsv"
+    diagnostics_path = tmp_path / "diagnostics.tsv"
+    _posterior([0.01], [0.03]).to_csv(target_path, sep="\t", index=False)
+    _posterior([0.02], [0.04]).to_csv(base_path, sep="\t", index=False)
+
+    monkeypatch.setattr(
+        "hercules.m3.calibrate_directional",
+        lambda *args, **kwargs: M3Result(
+            beta=np.array([0.015]),
+            variance=np.array([0.02]),
+            lambda_mean=np.array([0.5]),
+            converged=np.array([False]),
+            iterations=np.array([1000]),
+            elbo=np.array([-1.0]),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        integrate_posterior_tables(
+            target_path,
+            base_path,
+            output_path,
+            diagnostics_path=diagnostics_path,
+        )
+
+    assert diagnostics_path.is_file()
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    "problem", ["duplicate", "identity", "alleles", "variance", "empty"]
+)
+def test_alignment_and_input_failures_are_actionable(tmp_path: Path, problem: str) -> None:
+    target = _posterior([0.01, 0.02], [0.03, 0.04])
+    base = _posterior([0.015, -0.01], [0.05, 0.06])
+    expected = ""
+    if problem == "duplicate":
+        target.loc[1, ["SNP", "POS"]] = target.loc[0, ["SNP", "POS"]]
+        expected = "duplicate SNP key"
+    elif problem == "identity":
+        base.loc[0, "POS"] += 1
+        expected = "Incompatible target/base variant identity"
+    elif problem == "alleles":
+        base.loc[0, "A1"] = "T"
+        expected = "Incompatible target/base alleles"
+    elif problem == "variance":
+        base.loc[0, "VAR_BETA"] = 0.0
+        expected = "VAR_BETA must be finite and greater than zero"
+    else:
+        base["SNP"] = ["other1", "other2"]
+        expected = "intersection is empty"
+
+    target_path = tmp_path / "target.tsv"
+    base_path = tmp_path / "base.tsv"
+    target.to_csv(target_path, sep="\t", index=False)
+    base.to_csv(base_path, sep="\t", index=False)
+
+    with pytest.raises(ValueError, match=expected):
+        integrate_posterior_tables(target_path, base_path, tmp_path / "output.tsv")

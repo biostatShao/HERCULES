@@ -19,9 +19,13 @@ inputs:
     target: /work/data/ld/AFR/chr_{chrom}
   genotype_prefixes:
     base_validation: /work/data/genotypes/EUR_validation_chr{chrom}
-    target: /work/data/genotypes/AFR_target_chr{chrom}
   validation_genotype: /work/data/genotypes/AFR_validation_chr{chrom}
-  phenotype_file: /work/data/phenotype/AFR.target.tsv
+  phenotype_file: ""
+  target_validation_genotype: /work/data/genotypes/AFR_validation_chr{chrom}
+  target_validation_phenotype: /work/data/phenotype/AFR.stage3.validation.tsv
+  target_test_genotype: /work/data/genotypes/AFR_test_chr{chrom}
+  # Optional only when final test R2/AUC should be calculated.
+  target_test_phenotype: /work/data/phenotype/AFR.stage3.test.tsv
   phenotype_column: phenotype
   covariates: [age, sex, PC1, PC2]
   trait_type: quantitative
@@ -59,11 +63,15 @@ m2:
   validation_phenotype: /work/data/phenotype/EUR.validation.pheno
   validation_keep: /work/data/phenotype/EUR.validation.keep
 m3:
+  model: directional_pairwise_uniform_lambda
+  lambda_prior: uniform_0_1
   max_iter: 1000
   tol: 1.0e-6
+  quadrature_points: 32
 ensemble:
-  quantitative_learners: [SL.glmnet, SL.ridge]
-  binary_selection: best_individual_auc
+  quantitative_learners: [lasso, ridge, neural_network]
+  binary_learners: [lasso, neural_network]
+  binary_method: method.AUC
 
 checkpoint:
   enabled: true
